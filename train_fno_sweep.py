@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -81,8 +82,23 @@ def count_trainable_parameters(model: torch.nn.Module) -> int:
 
 
 def scenario_results_csv(results_dir: Path, scenario_dir: Path) -> Path:
+    scenario_group = resolve_scenario_group(scenario_dir)
     scenario_name = scenario_dir.name
-    return results_dir / f"{scenario_name}_fno_sweep_results.csv"
+    return results_dir / f"{scenario_group}_{scenario_name}_fno_sweep_results.csv"
+
+
+def resolve_scenario_group(scenario_dir: Path) -> str:
+    """Resolve scenario group from scenario_config.json."""
+    config_path = scenario_dir / "scenario_config.json"
+
+    with config_path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    scenario_group = str(config["scenario_group"]).strip().lower()
+    if not scenario_group:
+        raise ValueError(f"scenario_group is empty in {config_path}")
+
+    return scenario_group
 
 
 def append_result_row(csv_path: Path, row: dict[str, object], fieldnames: Iterable[str]) -> None:
@@ -95,6 +111,34 @@ def append_result_row(csv_path: Path, row: dict[str, object], fieldnames: Iterab
         if write_header:
             writer.writeheader()
         writer.writerow(row)
+
+
+def evaluate_l2(
+    model: torch.nn.Module,
+    dataloader,
+    device: torch.device,
+) -> float:
+    """Evaluate mean L2 loss across a dataloader using the training LpLoss setup."""
+    model.eval()
+    total_loss = 0.0
+    total_samples = 0
+    criterion = LpLoss(d=2, p=2, reduce_dims=[0, 1], reductions="mean")
+
+    with torch.no_grad():
+        for xb, yb in dataloader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            pred = model(xb)
+
+            loss = criterion(pred, yb)
+            batch_size = xb.size(0)
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
+
+    if total_samples == 0:
+        raise ValueError("Dataloader produced zero samples during L2 evaluation")
+
+    return total_loss / total_samples
 
 
 def train_one_model(
@@ -117,7 +161,7 @@ def train_one_model(
     disable_scheduler: bool,
     scheduler_step_size: int,
     scheduler_decay: float,
-) -> tuple[int, float, float]:
+) -> tuple[int, float, float, float, float]:
     # Build split loaders once per model size; normalization stats are train-split based.
     dataloaders = create_henry_dataloaders(
         scenario_dir=scenario_dir,
@@ -200,10 +244,12 @@ def train_one_model(
         if scheduler is not None:
             scheduler.step()
 
+    final_train_l2 = evaluate_l2(model, train_loader, device)
+    final_val_l2 = evaluate_l2(model, val_loader, device)
     final_train_mse = evaluate_mse(model, train_loader, device, normalizer)
     final_val_mse = evaluate_mse(model, val_loader, device, normalizer)
 
-    return total_params, final_train_mse, final_val_mse
+    return total_params, final_train_l2, final_val_l2, final_train_mse, final_val_mse
 
 
 def main() -> None:
@@ -226,6 +272,8 @@ def main() -> None:
         "n_modes_y",
         "n_layers",
         "total_params",
+        "train_l2",
+        "val_l2",
         "train_mse",
         "val_mse",
         "epochs",
@@ -251,7 +299,7 @@ def main() -> None:
         print("=" * 60)
 
         # Train one architecture variant and collect final metrics.
-        total_params, train_mse, val_mse = train_one_model(
+        total_params, train_l2, val_l2, train_mse, val_mse = train_one_model(
             scenario_dir=args.scenario_dir,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -281,6 +329,8 @@ def main() -> None:
             "n_modes_y": args.n_modes_y,
             "n_layers": args.n_layers,
             "total_params": total_params,
+            "train_l2": f"{train_l2:.6f}",
+            "val_l2": f"{val_l2:.6f}",
             "train_mse": f"{train_mse:.6f}",
             "val_mse": f"{val_mse:.6f}",
             "epochs": args.epochs,
@@ -297,7 +347,9 @@ def main() -> None:
 
         print(
             f"Completed hidden_channels={hidden_channels} | "
-            f"params={total_params} | train_mse={train_mse:.6f} | val_mse={val_mse:.6f}"
+            f"params={total_params} | "
+            f"train_l2={train_l2:.6f} | val_l2={val_l2:.6f} | "
+            f"train_mse={train_mse:.6f} | val_mse={val_mse:.6f}"
         )
 
     print("=" * 60)

@@ -1,0 +1,63 @@
+#!/bin/bash
+#PBS -P yl75
+#PBS -l walltime=12:00:00
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=95GB
+#PBS -l jobfs=10GB
+#PBS -l wd
+#PBS -l storage=scratch/yl75
+#PBS -N fno_sweep_henry
+#PBS -o logs/sweep_hidden_dims.out
+#PBS -j oe
+
+
+# Get to the project directory
+cd $PBS_O_WORKDIR/..
+
+# Extract the data to a temporary directory on the compute node
+unzip /scratch/yl75/ak4177/data/henry_data/all_scenarios_clean.zip -d $PBS_JOBFS/
+
+# Set up the scenarios root directory
+SCENARIOS_ROOT="$PBS_JOBFS/all_scenarios_clean/coupling_scenarios"
+
+# Activate the virtual environment if it exists, otherwise use the system Python
+PYTHON_BIN=".venv/bin/python"
+
+if [ ! -x "${PYTHON_BIN}" ]; then
+      echo "Python executable not found or not executable: ${PYTHON_BIN}"
+      exit 1
+fi
+
+for scenario_idx in 01 02 03 04 05; do
+      SCENARIO_DIR="${SCENARIOS_ROOT}/scenario_${scenario_idx}"
+
+      if [ ! -d "${SCENARIO_DIR}" ]; then
+            echo "Skipping missing scenario directory: ${SCENARIO_DIR}"
+            continue
+      fi
+
+      echo "============================================================"
+      echo "Running sweep for ${SCENARIO_DIR}"
+      echo "============================================================"
+
+      # Run the training script with the specified parameters
+      "${PYTHON_BIN}" train_fno_sweep.py \
+                        --scenario-dir "${SCENARIO_DIR}" \
+                        --hidden-channels-list "8,16,32,64,128" \
+                        --epochs 200 \
+                        --batch-size 512 \
+                        --learning-rate 1e-3 \
+                        --train-ratio 0.7 \
+                        --n-modes-x 8 \
+                        --n-modes-y 16 \
+                        --n-layers 4 \
+                        --num-workers 4
+
+      status=$?
+      if [ ${status} -ne 0 ]; then
+            echo "Sweep failed for scenario_${scenario_idx} with exit code ${status}"
+            exit ${status}
+      fi
+done

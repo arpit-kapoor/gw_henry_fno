@@ -212,3 +212,4 @@ __marimo__/
 
 # Temporary directories
 /results
+*fno_sweep_henry.o*
