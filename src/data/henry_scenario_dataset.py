@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+from .normalizer import Normalizer
 
 
 Split = Literal["train", "val"]
@@ -41,6 +43,9 @@ class HenryScenarioDataset(Dataset):
 		Torch dtype used for returned tensors, by default ``torch.float32``.
 	cache_runs : bool, optional
 		If True, cache per-run arrays after first access, by default True.
+	normalizer : Normalizer, optional
+		Normalizer instance to apply to input/output tensors.
+		If None, no normalization is applied, by default None.
 	"""
 
 	def __init__(
@@ -51,6 +56,7 @@ class HenryScenarioDataset(Dataset):
 		seed: int = 42,
 		dtype: torch.dtype = torch.float32,
 		cache_runs: bool = True,
+		normalizer: Optional[Normalizer] = None,
 	) -> None:
 		super().__init__()
 
@@ -68,6 +74,7 @@ class HenryScenarioDataset(Dataset):
 		self.seed = seed
 		self.dtype = dtype
 		self.cache_runs = cache_runs
+		self.normalizer = normalizer
 
 		all_run_dirs = self._discover_run_dirs(self.scenario_dir)
 		split_run_dirs = self._split_run_dirs(all_run_dirs, split=split, train_ratio=train_ratio, seed=seed)
@@ -189,6 +196,10 @@ class HenryScenarioDataset(Dataset):
 		x = torch.from_numpy(inputs[ref.window_index]).to(self.dtype)
 		y = torch.from_numpy(outputs[ref.window_index]).to(self.dtype)
 
+		if self.normalizer is not None:
+			x = self.normalizer.normalize_input(x)
+			y = self.normalizer.normalize_output(y)
+
 		return x, y
 
 	@property
@@ -206,16 +217,56 @@ def create_henry_dataloaders(
 	pin_memory: bool = False,
 	dtype: torch.dtype = torch.float32,
 	cache_runs: bool = True,
-) -> Tuple[DataLoader, DataLoader]:
+	normalize: bool = False,
+) -> Tuple[DataLoader, DataLoader] | Tuple[DataLoader, DataLoader, Normalizer]:
 	"""Create train and validation DataLoaders for one Henry scenario.
+
+	Parameters
+	----------
+	scenario_dir : str or Path
+		Path to scenario directory.
+	batch_size : int
+		Batch size for dataloaders.
+	train_ratio : float, optional
+		Train/val split ratio, by default 0.8.
+	seed : int, optional
+		Random seed for reproducibility, by default 42.
+	num_workers : int, optional
+		Number of dataloader workers, by default 0.
+	pin_memory : bool, optional
+		Whether to pin memory in dataloader, by default False.
+	dtype : torch.dtype, optional
+		Torch dtype for tensors, by default torch.float32.
+	cache_runs : bool, optional
+		Whether to cache runs in memory, by default True.
+	normalize : bool, optional
+		If True, compute normalizer from train set and apply to both datasets,
+		by default False.
 
 	Returns
 	-------
-	tuple of DataLoader
-		``(train_loader, val_loader)`` where training is shuffled and
-		validation is unshuffled.
+	tuple of DataLoader or tuple of (DataLoader, DataLoader, Normalizer)
+		If normalize=False: ``(train_loader, val_loader)``.
+		If normalize=True: ``(train_loader, val_loader, normalizer)``.
 	"""
 
+	# Create unnormalized dataset first (needed for normalizer computation)
+	train_dataset_unnormalized = HenryScenarioDataset(
+		scenario_dir=scenario_dir,
+		split="train",
+		train_ratio=train_ratio,
+		seed=seed,
+		dtype=dtype,
+		cache_runs=cache_runs,
+		normalizer=None,
+	)
+
+	# Compute normalizer if requested
+	normalizer = None
+	if normalize:
+		normalizer = Normalizer.from_dataset(train_dataset_unnormalized)
+
+	# Create final datasets with normalizer applied
 	train_dataset = HenryScenarioDataset(
 		scenario_dir=scenario_dir,
 		split="train",
@@ -223,6 +274,7 @@ def create_henry_dataloaders(
 		seed=seed,
 		dtype=dtype,
 		cache_runs=cache_runs,
+		normalizer=normalizer,
 	)
 	val_dataset = HenryScenarioDataset(
 		scenario_dir=scenario_dir,
@@ -231,6 +283,7 @@ def create_henry_dataloaders(
 		seed=seed,
 		dtype=dtype,
 		cache_runs=cache_runs,
+		normalizer=normalizer,
 	)
 
 	train_loader = DataLoader(
@@ -248,4 +301,7 @@ def create_henry_dataloaders(
 		pin_memory=pin_memory,
 	)
 
-	return train_loader, val_loader
+	if normalize:
+		return train_loader, val_loader, normalizer
+	else:
+		return train_loader, val_loader
