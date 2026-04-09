@@ -209,3 +209,6 @@ __marimo__/
 
 # MacOS
 .DS_Store
+
+# Temporary directories
+/results
