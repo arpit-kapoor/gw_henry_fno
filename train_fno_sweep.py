@@ -24,6 +24,88 @@ from src.config import (
 from train_fno import evaluate_mse, resolve_device, set_seed
 
 
+def _channelwise_relative_l2(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Compute per-sample, per-channel relative L2.
+
+    Returns a tensor of shape (B, C).
+    """
+    pred_flat = pred.flatten(start_dim=2)
+    target_flat = target.flatten(start_dim=2)
+    diff_norm = torch.linalg.norm(pred_flat - target_flat, dim=-1)
+    target_norm = torch.linalg.norm(target_flat, dim=-1)
+    return diff_norm / (target_norm + eps)
+
+
+def _channelwise_mse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute per-sample, per-channel MSE over spatial dimensions.
+
+    Returns a tensor of shape (B, C).
+    """
+    squared_error = (pred - target) ** 2
+    return squared_error.flatten(start_dim=2).mean(dim=-1)
+
+
+def evaluate_channel_metrics(
+    model: torch.nn.Module,
+    dataloader,
+    device: torch.device,
+    normalizer=None,
+    eps: float = 1e-12,
+) -> dict[str, list[float]]:
+    """Evaluate channel-wise normalized/denormalized relative L2 and MSE."""
+    model.eval()
+    total_samples = 0
+
+    rel_l2_norm_sum = None
+    rel_l2_denorm_sum = None
+    mse_norm_sum = None
+    mse_denorm_sum = None
+
+    with torch.no_grad():
+        for xb, yb in dataloader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            pred = model(xb)
+
+            if pred.shape != yb.shape:
+                raise ValueError(f"Prediction/target shape mismatch: {pred.shape} vs {yb.shape}")
+
+            pred_denorm = pred
+            yb_denorm = yb
+            if normalizer is not None:
+                pred_denorm = normalizer.denormalize_output(pred)
+                yb_denorm = normalizer.denormalize_output(yb)
+
+            rel_l2_norm = _channelwise_relative_l2(pred, yb, eps=eps)
+            rel_l2_denorm = _channelwise_relative_l2(pred_denorm, yb_denorm, eps=eps)
+            mse_norm = _channelwise_mse(pred, yb)
+            mse_denorm = _channelwise_mse(pred_denorm, yb_denorm)
+
+            if rel_l2_norm_sum is None:
+                channels = rel_l2_norm.shape[1]
+                rel_l2_norm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+                rel_l2_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+                mse_norm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+                mse_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+
+            rel_l2_norm_sum += rel_l2_norm.sum(dim=0, dtype=torch.float64)
+            rel_l2_denorm_sum += rel_l2_denorm.sum(dim=0, dtype=torch.float64)
+            mse_norm_sum += mse_norm.sum(dim=0, dtype=torch.float64)
+            mse_denorm_sum += mse_denorm.sum(dim=0, dtype=torch.float64)
+
+            total_samples += xb.size(0)
+
+    if total_samples == 0:
+        raise ValueError("Dataloader produced zero samples during channel metric evaluation")
+
+    return {
+        "rel_l2_norm_channels": (rel_l2_norm_sum / total_samples).cpu().tolist(),
+        "rel_l2_denorm_channels": (rel_l2_denorm_sum / total_samples).cpu().tolist(),
+        "mse_norm_channels": (mse_norm_sum / total_samples).cpu().tolist(),
+        "mse_denorm_channels": (mse_denorm_sum / total_samples).cpu().tolist(),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train multiple FNO models for one scenario and append results to CSV",
@@ -161,7 +243,22 @@ def train_one_model(
     disable_scheduler: bool,
     scheduler_step_size: int,
     scheduler_decay: float,
-) -> tuple[int, float, float, float, float]:
+) -> tuple[
+    int,
+    float,
+    float,
+    float,
+    float,
+    int,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+]:
     # Build split loaders once per model size; normalization stats are train-split based.
     dataloaders = create_henry_dataloaders(
         scenario_dir=scenario_dir,
@@ -248,8 +345,35 @@ def train_one_model(
     final_val_l2 = evaluate_l2(model, val_loader, device)
     final_train_mse = evaluate_mse(model, train_loader, device, normalizer)
     final_val_mse = evaluate_mse(model, val_loader, device, normalizer)
+    train_channel_metrics = evaluate_channel_metrics(
+        model=model,
+        dataloader=train_loader,
+        device=device,
+        normalizer=normalizer,
+    )
+    val_channel_metrics = evaluate_channel_metrics(
+        model=model,
+        dataloader=val_loader,
+        device=device,
+        normalizer=normalizer,
+    )
 
-    return total_params, final_train_l2, final_val_l2, final_train_mse, final_val_mse
+    return (
+        total_params,
+        final_train_l2,
+        final_val_l2,
+        final_train_mse,
+        final_val_mse,
+        out_channels,
+        json.dumps(train_channel_metrics["rel_l2_norm_channels"]),
+        json.dumps(val_channel_metrics["rel_l2_norm_channels"]),
+        json.dumps(train_channel_metrics["rel_l2_denorm_channels"]),
+        json.dumps(val_channel_metrics["rel_l2_denorm_channels"]),
+        json.dumps(train_channel_metrics["mse_norm_channels"]),
+        json.dumps(val_channel_metrics["mse_norm_channels"]),
+        json.dumps(train_channel_metrics["mse_denorm_channels"]),
+        json.dumps(val_channel_metrics["mse_denorm_channels"]),
+    )
 
 
 def main() -> None:
@@ -276,6 +400,15 @@ def main() -> None:
         "val_l2",
         "train_mse",
         "val_mse",
+        "num_output_channels",
+        "train_rel_l2_norm_channels",
+        "val_rel_l2_norm_channels",
+        "train_rel_l2_denorm_channels",
+        "val_rel_l2_denorm_channels",
+        "train_mse_norm_channels",
+        "val_mse_norm_channels",
+        "train_mse_denorm_channels",
+        "val_mse_denorm_channels",
         "epochs",
         "batch_size",
         "learning_rate",
@@ -294,12 +427,33 @@ def main() -> None:
     print(f"results csv: {csv_path}")
 
     for hidden_channels in hidden_channels_values:
+        # Re-seed per width so initialization and shuffled batch order do not
+        # depend on sweep position (e.g., 32 always being 3rd in the loop).
+        model_seed = args.seed + hidden_channels
+        set_seed(model_seed)
+
         print("=" * 60)
         print(f"Training model with hidden_channels={hidden_channels}")
+        print(f"model_seed: {model_seed}")
         print("=" * 60)
 
         # Train one architecture variant and collect final metrics.
-        total_params, train_l2, val_l2, train_mse, val_mse = train_one_model(
+        (
+            total_params,
+            train_l2,
+            val_l2,
+            train_mse,
+            val_mse,
+            num_output_channels,
+            train_rel_l2_norm_channels,
+            val_rel_l2_norm_channels,
+            train_rel_l2_denorm_channels,
+            val_rel_l2_denorm_channels,
+            train_mse_norm_channels,
+            val_mse_norm_channels,
+            train_mse_denorm_channels,
+            val_mse_denorm_channels,
+        ) = train_one_model(
             scenario_dir=args.scenario_dir,
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -333,6 +487,15 @@ def main() -> None:
             "val_l2": f"{val_l2:.6f}",
             "train_mse": f"{train_mse:.6f}",
             "val_mse": f"{val_mse:.6f}",
+            "num_output_channels": num_output_channels,
+            "train_rel_l2_norm_channels": train_rel_l2_norm_channels,
+            "val_rel_l2_norm_channels": val_rel_l2_norm_channels,
+            "train_rel_l2_denorm_channels": train_rel_l2_denorm_channels,
+            "val_rel_l2_denorm_channels": val_rel_l2_denorm_channels,
+            "train_mse_norm_channels": train_mse_norm_channels,
+            "val_mse_norm_channels": val_mse_norm_channels,
+            "train_mse_denorm_channels": train_mse_denorm_channels,
+            "val_mse_denorm_channels": val_mse_denorm_channels,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "learning_rate": args.learning_rate,
@@ -349,7 +512,8 @@ def main() -> None:
             f"Completed hidden_channels={hidden_channels} | "
             f"params={total_params} | "
             f"train_l2={train_l2:.6f} | val_l2={val_l2:.6f} | "
-            f"train_mse={train_mse:.6f} | val_mse={val_mse:.6f}"
+            f"train_mse={train_mse:.6f} | val_mse={val_mse:.6f} | "
+            f"val_rel_l2_denorm_channels={val_rel_l2_denorm_channels}"
         )
 
     print("=" * 60)
