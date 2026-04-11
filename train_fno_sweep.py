@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 from src.data.henry_scenario_dataset import create_henry_dataloaders
@@ -22,6 +25,26 @@ from src.config import (
     validate_common_args,
 )
 from train_fno import evaluate_mse, resolve_device, set_seed
+
+
+@dataclass(frozen=True)
+class ModelSizeConfig:
+    label: str
+    hidden_channels: int
+    n_modes_x: int
+    n_modes_y: int
+    n_layers: int
+
+
+MODEL_SIZE_PRESETS: dict[str, ModelSizeConfig] = {
+    # Presets inspired by coordinated scaling used in PDE surrogate benchmarks.
+    "tiny": ModelSizeConfig("tiny", hidden_channels=4, n_modes_x=4, n_modes_y=8, n_layers=4),
+    "small": ModelSizeConfig("small", hidden_channels=8, n_modes_x=8, n_modes_y=16, n_layers=4),
+    "medium": ModelSizeConfig("medium", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=6),
+    "large": ModelSizeConfig("large", hidden_channels=32, n_modes_x=12, n_modes_y=24, n_layers=6),
+    "huge": ModelSizeConfig("huge", hidden_channels=48, n_modes_x=16, n_modes_y=32, n_layers=6),
+    "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=24, n_modes_y=48, n_layers=8),
+}
 
 
 def _channelwise_relative_l2(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -135,7 +158,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--hidden-channels-list",
         type=str,
         default="8,16,32,64,128",
-        help="Comma-separated hidden channel values",
+        help="Comma-separated hidden channel values (used when --sweep-mode=hidden)",
+    )
+
+    parser.add_argument(
+        "--sweep-mode",
+        type=str,
+        choices=["hidden", "preset"],
+        default="hidden",
+        help="Sweep hidden width only or coordinated model-size presets",
+    )
+
+    parser.add_argument(
+        "--model-size-presets",
+        type=str,
+        default="tiny,small,medium,large,huge,massive",
+        help="Comma-separated preset names for --sweep-mode=preset",
     )
 
     parser.set_defaults(normalize=True)
@@ -148,6 +186,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where scenario-specific CSV is stored",
     )
 
+    parser.add_argument(
+        "--artifact-dir-name",
+        type=str,
+        default="validation_final_step_artifacts",
+        help="Subdirectory under results-dir for final-step prediction artifacts",
+    )
+
     return parser
 
 
@@ -157,6 +202,21 @@ def parse_hidden_channels(values: str) -> list[int]:
     if not parsed:
         raise ValueError("--hidden-channels-list must contain at least one integer")
     return parsed
+
+
+def parse_model_size_presets(values: str) -> list[ModelSizeConfig]:
+    requested = [v.strip().lower() for v in values.split(",") if v.strip()]
+    if not requested:
+        raise ValueError("--model-size-presets must contain at least one preset name")
+
+    configs: list[ModelSizeConfig] = []
+    for preset_name in requested:
+        if preset_name not in MODEL_SIZE_PRESETS:
+            valid = ", ".join(sorted(MODEL_SIZE_PRESETS))
+            raise ValueError(f"Unknown model size preset '{preset_name}'. Valid presets: {valid}")
+        configs.append(MODEL_SIZE_PRESETS[preset_name])
+
+    return configs
 
 
 def count_trainable_parameters(model: torch.nn.Module) -> int:
@@ -193,6 +253,140 @@ def append_result_row(csv_path: Path, row: dict[str, object], fieldnames: Iterab
         if write_header:
             writer.writeheader()
         writer.writerow(row)
+
+
+def _extract_final_validation_sample(
+    model: torch.nn.Module,
+    val_loader,
+    device: torch.device,
+    normalizer=None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return denormalized prediction/target for the final validation sample."""
+    dataset = val_loader.dataset
+    if len(dataset) == 0:
+        raise ValueError("Validation dataset is empty; cannot create final-step artifacts")
+
+    # Validation DataLoader is not shuffled; the final element maps to final step ordering.
+    xb_single, yb_single = dataset[len(dataset) - 1]
+    xb = xb_single.unsqueeze(0).to(device)
+
+    model.eval()
+    with torch.no_grad():
+        pred = model(xb)
+
+    yb = yb_single.unsqueeze(0).to(device)
+    if normalizer is not None:
+        pred = normalizer.denormalize_output(pred)
+        yb = normalizer.denormalize_output(yb)
+
+    return pred.squeeze(0).detach().cpu(), yb.squeeze(0).detach().cpu()
+
+
+def _plot_validation_prediction_comparison(
+    prediction: torch.Tensor,
+    ground_truth: torch.Tensor,
+    output_path: Path,
+    scenario_name: str,
+    model_size_label: str,
+    hidden_channels: int,
+) -> None:
+    """Save a 2 x C panel plot: ground truth row and prediction row."""
+    if prediction.shape != ground_truth.shape:
+        raise ValueError(f"Prediction/ground truth shape mismatch: {prediction.shape} vs {ground_truth.shape}")
+
+    num_channels = int(ground_truth.shape[0])
+    channel_names = [f"Channel {idx}" for idx in range(num_channels)]
+    if num_channels >= 2:
+        channel_names[0] = "Concentration"
+        channel_names[1] = "Head"
+
+    fig, axes = plt.subplots(
+        2,
+        num_channels,
+        figsize=(max(6.0, 4.8 * num_channels), 7.8),
+        constrained_layout=True,
+    )
+
+    if num_channels == 1:
+        axes_2d = np.array([[axes[0]], [axes[1]]], dtype=object)
+    else:
+        axes_2d = axes
+    for channel_idx in range(num_channels):
+        gt_ch = ground_truth[channel_idx].numpy()
+        pred_ch = prediction[channel_idx].numpy()
+        vmin = float(min(gt_ch.min(), pred_ch.min()))
+        vmax = float(max(gt_ch.max(), pred_ch.max()))
+
+        ax_gt = axes_2d[0, channel_idx]
+        im_gt = ax_gt.imshow(gt_ch, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
+        ax_gt.set_title(f"Ground Truth - {channel_names[channel_idx]}")
+        fig.colorbar(im_gt, ax=ax_gt, fraction=0.046, pad=0.04)
+
+        ax_pred = axes_2d[1, channel_idx]
+        im_pred = ax_pred.imshow(pred_ch, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
+        ax_pred.set_title(f"FNO Prediction - {channel_names[channel_idx]}")
+        fig.colorbar(im_pred, ax=ax_pred, fraction=0.046, pad=0.04)
+
+        ax_gt.set_xlabel("x-index")
+        ax_gt.set_ylabel("z-index")
+        ax_pred.set_xlabel("x-index")
+        ax_pred.set_ylabel("z-index")
+
+    fig.suptitle(
+        (
+            f"Scenario: {scenario_name} | "
+            f"size_preset={model_size_label} | "
+            f"hidden_channels={hidden_channels} | "
+            "Validation Final Step"
+        ),
+        fontsize=11,
+        fontweight="bold",
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_validation_final_step_artifacts(
+    model: torch.nn.Module,
+    val_loader,
+    device: torch.device,
+    normalizer,
+    output_dir: Path,
+    scenario_name: str,
+    model_size_label: str,
+    hidden_channels: int,
+) -> tuple[Path, Path]:
+    """Save final validation ground truth/prediction arrays and comparison plot."""
+    prediction, ground_truth = _extract_final_validation_sample(
+        model=model,
+        val_loader=val_loader,
+        device=device,
+        normalizer=normalizer,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"{scenario_name}_{model_size_label}_val_final_step"
+
+    npz_path = output_dir / f"{base_name}.npz"
+    np.savez_compressed(
+        npz_path,
+        prediction=prediction.numpy(),
+        ground_truth=ground_truth.numpy(),
+        abs_error=(prediction - ground_truth).abs().numpy(),
+    )
+
+    fig_path = output_dir / f"{base_name}.png"
+    _plot_validation_prediction_comparison(
+        prediction=prediction,
+        ground_truth=ground_truth,
+        output_path=fig_path,
+        scenario_name=scenario_name,
+        model_size_label=model_size_label,
+        hidden_channels=hidden_channels,
+    )
+
+    return npz_path, fig_path
 
 
 def evaluate_l2(
@@ -244,6 +438,9 @@ def train_one_model(
     scheduler_step_size: int,
     scheduler_decay: float,
 ) -> tuple[
+    torch.nn.Module,
+    object,
+    object,
     int,
     float,
     float,
@@ -359,6 +556,9 @@ def train_one_model(
     )
 
     return (
+        model,
+        val_loader,
+        normalizer,
         total_params,
         final_train_l2,
         final_val_l2,
@@ -382,15 +582,30 @@ def main() -> None:
 
     validate_common_args(parser, args)
 
-    hidden_channels_values = parse_hidden_channels(args.hidden_channels_list)
+    if args.sweep_mode == "preset":
+        sweep_configs = parse_model_size_presets(args.model_size_presets)
+    else:
+        hidden_channels_values = parse_hidden_channels(args.hidden_channels_list)
+        sweep_configs = [
+            ModelSizeConfig(
+                label=f"hidden_{hidden_channels}",
+                hidden_channels=hidden_channels,
+                n_modes_x=args.n_modes_x,
+                n_modes_y=args.n_modes_y,
+                n_layers=args.n_layers,
+            )
+            for hidden_channels in hidden_channels_values
+        ]
 
     set_seed(args.seed)
     device = resolve_device(args.device)
 
     csv_path = scenario_results_csv(args.results_dir, args.scenario_dir)
+    artifact_dir = args.results_dir / args.artifact_dir_name / args.scenario_dir.name
     fieldnames = [
         "timestamp",
         "scenario",
+        "model_size_label",
         "hidden_channels",
         "n_modes_x",
         "n_modes_y",
@@ -418,27 +633,47 @@ def main() -> None:
         "scheduler_step_size",
         "scheduler_decay",
         "device",
+        "val_final_step_npz",
+        "val_final_step_plot",
     ]
 
     print("Starting multi-model FNO sweep")
     print(f"scenario: {args.scenario_dir}")
-    print(f"hidden_channels_list: {hidden_channels_values}")
-    print(f"fixed architecture: n_modes=({args.n_modes_x}, {args.n_modes_y}), n_layers={args.n_layers}")
+    print(f"sweep_mode: {args.sweep_mode}")
+    if args.sweep_mode == "preset":
+        print(f"model_size_presets: {[cfg.label for cfg in sweep_configs]}")
+    else:
+        print(f"hidden_channels_list: {[cfg.hidden_channels for cfg in sweep_configs]}")
+        print(f"fixed architecture: n_modes=({args.n_modes_x}, {args.n_modes_y}), n_layers={args.n_layers}")
     print(f"results csv: {csv_path}")
+    print(f"validation artifact dir: {artifact_dir}")
 
-    for hidden_channels in hidden_channels_values:
-        # Re-seed per width so initialization and shuffled batch order do not
-        # depend on sweep position (e.g., 32 always being 3rd in the loop).
-        model_seed = args.seed + hidden_channels
+    for config in sweep_configs:
+        # Re-seed per configuration so initialization and shuffled batch order
+        # do not depend on loop position.
+        model_seed = (
+            args.seed
+            + config.hidden_channels
+            + config.n_modes_x
+            + config.n_modes_y
+            + 10 * config.n_layers
+        )
         set_seed(model_seed)
 
         print("=" * 60)
-        print(f"Training model with hidden_channels={hidden_channels}")
+        print(
+            "Training model config "
+            f"label={config.label}, hidden_channels={config.hidden_channels}, "
+            f"n_modes=({config.n_modes_x}, {config.n_modes_y}), n_layers={config.n_layers}"
+        )
         print(f"model_seed: {model_seed}")
         print("=" * 60)
 
         # Train one architecture variant and collect final metrics.
         (
+            model,
+            val_loader,
+            normalizer,
             total_params,
             train_l2,
             val_l2,
@@ -462,10 +697,10 @@ def main() -> None:
             train_ratio=args.train_ratio,
             seed=args.seed,
             device=device,
-            n_modes_x=args.n_modes_x,
-            n_modes_y=args.n_modes_y,
-            hidden_channels=hidden_channels,
-            n_layers=args.n_layers,
+            n_modes_x=config.n_modes_x,
+            n_modes_y=config.n_modes_y,
+            hidden_channels=config.hidden_channels,
+            n_layers=config.n_layers,
             num_workers=args.num_workers,
             pin_memory=args.pin_memory,
             normalize=args.normalize,
@@ -474,14 +709,26 @@ def main() -> None:
             scheduler_decay=args.scheduler_decay,
         )
 
+        npz_artifact_path, plot_artifact_path = save_validation_final_step_artifacts(
+            model=model,
+            val_loader=val_loader,
+            device=device,
+            normalizer=normalizer,
+            output_dir=artifact_dir,
+            scenario_name=args.scenario_dir.name,
+            model_size_label=config.label,
+            hidden_channels=config.hidden_channels,
+        )
+
         # Append one row per model size for scenario-level comparison.
         row = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "scenario": args.scenario_dir.name,
-            "hidden_channels": hidden_channels,
-            "n_modes_x": args.n_modes_x,
-            "n_modes_y": args.n_modes_y,
-            "n_layers": args.n_layers,
+            "model_size_label": config.label,
+            "hidden_channels": config.hidden_channels,
+            "n_modes_x": config.n_modes_x,
+            "n_modes_y": config.n_modes_y,
+            "n_layers": config.n_layers,
             "total_params": total_params,
             "train_l2": f"{train_l2:.6f}",
             "val_l2": f"{val_l2:.6f}",
@@ -505,15 +752,19 @@ def main() -> None:
             "scheduler_step_size": args.scheduler_step_size,
             "scheduler_decay": args.scheduler_decay,
             "device": str(device),
+            "val_final_step_npz": str(npz_artifact_path),
+            "val_final_step_plot": str(plot_artifact_path),
         }
         append_result_row(csv_path, row, fieldnames)
 
         print(
-            f"Completed hidden_channels={hidden_channels} | "
+            f"Completed label={config.label}, hidden_channels={config.hidden_channels} | "
             f"params={total_params} | "
             f"train_l2={train_l2:.6f} | val_l2={val_l2:.6f} | "
             f"train_mse={train_mse:.6f} | val_mse={val_mse:.6f} | "
-            f"val_rel_l2_denorm_channels={val_rel_l2_denorm_channels}"
+            f"val_rel_l2_denorm_channels={val_rel_l2_denorm_channels} | "
+            f"saved_npz={npz_artifact_path.name} | "
+            f"saved_plot={plot_artifact_path.name}"
         )
 
     print("=" * 60)

@@ -21,16 +21,19 @@ unzip /scratch/yl75/ak4177/data/henry_data/all_scenarios_clean.zip -d $PBS_JOBFS
 
 # Set up the scenarios root directory
 SCENARIOS_ROOT="$PBS_JOBFS/all_scenarios_clean/coupling_scenarios"
+# SCENARIOS_ROOT="$PBS_JOBFS/all_scenarios_clean/diffusion_scenarios"
 
 # Activate the virtual environment if it exists, otherwise use the system Python
 PYTHON_BIN=".venv/bin/python"
+# MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
+MODEL_SIZE_PRESETS="small,medium,huge"
 
 if [ ! -x "${PYTHON_BIN}" ]; then
       echo "Python executable not found or not executable: ${PYTHON_BIN}"
       exit 1
 fi
 
-for scenario_idx in 01 02 03 04 05; do
+for scenario_idx in 05; do
       SCENARIO_DIR="${SCENARIOS_ROOT}/scenario_${scenario_idx}"
 
       if [ ! -d "${SCENARIO_DIR}" ]; then
@@ -45,15 +48,15 @@ for scenario_idx in 01 02 03 04 05; do
       # Run the training script with the specified parameters
       "${PYTHON_BIN}" train_fno_sweep.py \
                         --scenario-dir "${SCENARIO_DIR}" \
-                        --hidden-channels-list "8,16,32,64,128" \
-                        --epochs 200 \
+                        --sweep-mode preset \
+                        --model-size-presets "${MODEL_SIZE_PRESETS}" \
+                        --epochs 500 \
                         --batch-size 512 \
-                        --learning-rate 1e-3 \
+                        --learning-rate 8e-4 \
                         --train-ratio 0.7 \
-                        --n-modes-x 8 \
-                        --n-modes-y 16 \
-                        --n-layers 4 \
-                        --num-workers 4
+                        --num-workers 4 \
+                        --scheduler-step-size 50 \
+                        --scheduler-decay 0.80
 
       status=$?
       if [ ${status} -ne 0 ]; then
