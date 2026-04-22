@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""CLI entrypoint for running FNO architecture sweeps."""
+
 from datetime import datetime
 from src.config import validate_common_args
 from src.sweep import (
@@ -17,6 +19,7 @@ from train_fno import evaluate_mse, resolve_device, set_seed
 
 
 def main() -> None:
+    """Parse sweep CLI arguments and orchestrate multi-model training."""
     # Thin CLI entrypoint that delegates core work to src/sweep modules.
     parser = build_parser()
     args = parser.parse_args()

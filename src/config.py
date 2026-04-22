@@ -11,6 +11,7 @@ def add_scenario_arg(
     required: bool,
     default: Optional[Path] = None,
 ) -> None:
+    """Register the scenario directory CLI argument."""
     parser.add_argument(
         "--scenario-dir",
         type=Path,
@@ -28,6 +29,7 @@ def add_training_args(
     default_learning_rate: float = 1e-3,
     default_weight_decay: float = 0.0,
 ) -> None:
+    """Register training-loop and optimizer hyperparameters."""
     parser.add_argument("--epochs", type=int, default=default_epochs, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=default_batch_size, help="Batch size")
     parser.add_argument("--learning-rate", type=float, default=default_learning_rate, help="Optimizer learning rate")
@@ -40,6 +42,7 @@ def add_scheduler_args(
     default_step_size: int = 5,
     default_decay: float = 0.98,
 ) -> None:
+    """Register learning-rate scheduler controls."""
     parser.add_argument(
         "--scheduler-step-size",
         type=int,
@@ -65,6 +68,7 @@ def add_split_and_seed_args(
     default_train_ratio: float = 0.8,
     default_seed: int = 42,
 ) -> None:
+    """Register train/validation split and reproducibility arguments."""
     parser.add_argument("--train-ratio", type=float, default=default_train_ratio, help="Run-level train split ratio")
     parser.add_argument("--seed", type=int, default=default_seed, help="Random seed for split and training")
 
@@ -77,6 +81,7 @@ def add_model_args(
     default_hidden_channels: int = 32,
     default_n_layers: int = 4,
 ) -> None:
+    """Register core FNO architecture arguments."""
     parser.add_argument("--n-modes-x", type=int, default=default_n_modes_x, help="FNO modes in X dimension")
     parser.add_argument("--n-modes-y", type=int, default=default_n_modes_y, help="FNO modes in Y dimension")
     parser.add_argument("--hidden-channels", type=int, default=default_hidden_channels, help="FNO hidden channels")
@@ -89,6 +94,7 @@ def add_runtime_args(
     default_num_workers: int = 0,
     default_device: str = "auto",
 ) -> None:
+    """Register runtime arguments such as device and loader settings."""
     parser.add_argument("--num-workers", type=int, default=default_num_workers, help="DataLoader workers")
     parser.add_argument(
         "--pin-memory",
@@ -110,6 +116,7 @@ def add_runtime_args(
 
 
 def validate_common_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Validate shared numeric argument constraints for training scripts."""
     if args.epochs <= 0:
         parser.error("--epochs must be > 0")
     if args.batch_size <= 0:
@@ -127,6 +134,7 @@ def validate_common_args(parser: argparse.ArgumentParser, args: argparse.Namespa
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Create the standard parser for single-scenario training."""
     parser = argparse.ArgumentParser(
         description="Train FNO on a single Henry coupling scenario",
     )
@@ -142,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate command-line arguments."""
     parser = build_parser()
     args = parser.parse_args()
 
