@@ -17,8 +17,11 @@ from .metrics import evaluate_channel_metrics, evaluate_l2
 @dataclass(frozen=True)
 class TrainOneModelResult:
     model: torch.nn.Module
+    train_loader: object
     val_loader: object
     normalizer: object
+    train_l2_history: list[float]
+    val_l2_history: list[float]
     total_params: int
     final_train_l2: float
     final_val_l2: float
@@ -41,13 +44,15 @@ def count_trainable_parameters(model: torch.nn.Module) -> int:
 
 def train_one_model(
     *,
-    scenario_dir: Path,
+    scenarios_dir: Path,
     epochs: int,
     batch_size: int,
     learning_rate: float,
     weight_decay: float,
+    eval_every: int,
     train_ratio: float,
     seed: int,
+    validation_run_name: Optional[str],
     device: torch.device,
     n_modes_x: int,
     n_modes_y: int,
@@ -62,14 +67,18 @@ def train_one_model(
     evaluate_mse_fn: Callable,
 ) -> TrainOneModelResult:
     """Train one model configuration and return final sweep metrics."""
+    if eval_every <= 0:
+        raise ValueError(f"eval_every must be > 0, got {eval_every}")
+
     dataloaders = create_henry_dataloaders(
-        scenario_dir=scenario_dir,
+        scenarios_dir=scenarios_dir,
         batch_size=batch_size,
         train_ratio=train_ratio,
         seed=seed,
         num_workers=num_workers,
         pin_memory=pin_memory,
         normalize=normalize,
+        validation_run_name=validation_run_name,
     )
 
     if normalize:
@@ -107,14 +116,17 @@ def train_one_model(
             gamma=scheduler_decay,
         )
 
+    train_l2_history: list[float] = []
+    val_l2_history: list[float] = []
+
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
         total_samples = 0
 
         for xb, yb in train_loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             pred = model(xb)
@@ -127,16 +139,30 @@ def train_one_model(
             total_samples += batch_size_local
 
         epoch_train_l2 = running_loss / total_samples
-        epoch_val_mse = evaluate_mse_fn(model, val_loader, device, normalizer)
+        # Always evaluate global validation loss each epoch for convergence plotting.
+        # This is distinct from per-scenario evaluation, which happens only at the end.
+        epoch_val_l2 = evaluate_l2(model, val_loader, device)
+        train_l2_history.append(epoch_train_l2)
+        val_l2_history.append(epoch_val_l2)
         current_lr = optimizer.param_groups[0]["lr"]
 
-        print(
-            f"Epoch {epoch:03d}/{epochs} - "
-            f"hidden_channels: {hidden_channels}, "
-            f"train_l2: {epoch_train_l2:.6f}, "
-            f"val_mse: {epoch_val_mse:.6f}, "
-            f"lr: {current_lr:.6e}"
-        )
+        should_log = (epoch % eval_every == 0) or (epoch == epochs)
+        if should_log:
+            print(
+                f"Epoch {epoch:03d}/{epochs} - "
+                f"hidden_channels: {hidden_channels}, "
+                f"train_l2: {epoch_train_l2:.6f}, "
+                f"val_l2: {epoch_val_l2:.6f}, "
+                f"lr: {current_lr:.6e}"
+            )
+        else:
+            print(
+                f"Epoch {epoch:03d}/{epochs} - "
+                f"hidden_channels: {hidden_channels}, "
+                f"train_l2: {epoch_train_l2:.6f}, "
+                f"val_l2: {epoch_val_l2:.6f}, "
+                f"lr: {current_lr:.6e}"
+            )
 
         if scheduler is not None:
             scheduler.step()
@@ -161,8 +187,11 @@ def train_one_model(
 
     return TrainOneModelResult(
         model=model,
+        train_loader=train_loader,
         val_loader=val_loader,
         normalizer=normalizer,
+        train_l2_history=train_l2_history,
+        val_l2_history=val_l2_history,
         total_params=total_params,
         final_train_l2=final_train_l2,
         final_val_l2=final_val_l2,

@@ -17,50 +17,49 @@
 cd $PBS_O_WORKDIR/..
 
 # Extract the data to a temporary directory on the compute node
-unzip /scratch/yl75/ak4177/data/henry_data/all_scenarios_clean.zip -d $PBS_JOBFS/
+unzip /scratch/yl75/ak4177/data/henry_data/grid_scenarios_20x40.zip -d $PBS_JOBFS/
 
 # Set up the scenarios root directory
-SCENARIOS_ROOT="$PBS_JOBFS/all_scenarios_clean/coupling_scenarios"
-# SCENARIOS_ROOT="$PBS_JOBFS/all_scenarios_clean/diffusion_scenarios"
+SCENARIOS_ROOT="$PBS_JOBFS/grid_scenarios_20x40/scenarios"
 
 # Activate the virtual environment if it exists, otherwise use the system Python
 PYTHON_BIN=".venv/bin/python"
 # MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
-MODEL_SIZE_PRESETS="small,medium,huge"
+MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
 
 if [ ! -x "${PYTHON_BIN}" ]; then
       echo "Python executable not found or not executable: ${PYTHON_BIN}"
       exit 1
 fi
 
-for scenario_idx in 05; do
-      SCENARIO_DIR="${SCENARIOS_ROOT}/scenario_${scenario_idx}"
+if [ ! -d "${SCENARIOS_ROOT}" ]; then
+      echo "Scenarios root directory not found: ${SCENARIOS_ROOT}"
+      exit 1
+fi
 
-      if [ ! -d "${SCENARIO_DIR}" ]; then
-            echo "Skipping missing scenario directory: ${SCENARIO_DIR}"
-            continue
-      fi
+echo "============================================================"
+echo "Running sweep for scenarios root: ${SCENARIOS_ROOT}"
+echo "Model size presets: ${MODEL_SIZE_PRESETS}"
+echo "============================================================"
 
-      echo "============================================================"
-      echo "Running sweep for ${SCENARIO_DIR}"
-      echo "============================================================"
 
-      # Run the training script with the specified parameters
-      "${PYTHON_BIN}" train_fno_sweep.py \
-                        --scenario-dir "${SCENARIO_DIR}" \
-                        --sweep-mode preset \
-                        --model-size-presets "${MODEL_SIZE_PRESETS}" \
-                        --epochs 500 \
-                        --batch-size 512 \
-                        --learning-rate 8e-4 \
-                        --train-ratio 0.7 \
-                        --num-workers 4 \
-                        --scheduler-step-size 50 \
-                        --scheduler-decay 0.80
+# Run the training script with the specified parameters
+"${PYTHON_BIN}" train_fno_sweep.py \
+                  --scenarios-dir "${SCENARIOS_ROOT}" \
+                  --sweep-mode preset \
+                  --model-size-presets "${MODEL_SIZE_PRESETS}" \
+                  --epochs 500 \
+                  --batch-size 512 \
+                  --learning-rate 8e-4 \
+                  --train-ratio 0.7 \
+                  --num-workers 4 \
+                  --pin-memory \
+                  --scheduler-step-size 50 \
+                  --scheduler-decay 0.80 \
+                  --validation-run-name "run_000003"
 
-      status=$?
-      if [ ${status} -ne 0 ]; then
-            echo "Sweep failed for scenario_${scenario_idx} with exit code ${status}"
-            exit ${status}
-      fi
-done
+status=$?
+if [ ${status} -ne 0 ]; then
+      echo "Sweep failed with exit code ${status}"
+      exit ${status}
+fi

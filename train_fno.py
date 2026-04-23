@@ -1,4 +1,4 @@
-"""Train a single FNO model on one Henry scenario."""
+"""Train a single FNO model across Henry scenarios."""
 
 from __future__ import annotations
 
@@ -67,8 +67,8 @@ def evaluate_mse(
 
     with torch.no_grad():
         for xb, yb in dataloader:
-            xb = xb.to(device)
-            yb = yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
             pred = model(xb)
 
             # Denormalize if normalizer is provided
@@ -97,20 +97,21 @@ def main() -> None:
 
     # Build train/validation loaders and optional normalizer from CLI settings.
     dataloaders = create_henry_dataloaders(
-        scenario_dir=args.scenario_dir,
+        scenarios_dir=args.scenario_dir,
         batch_size=args.batch_size,
         train_ratio=args.train_ratio,
         seed=args.seed,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         normalize=args.normalize,
+        validation_run_name=args.validation_run_name,
     )
 
     # Unpack optional normalizer returned by loader factory.
     if args.normalize:
-        train_loader, test_loader, normalizer = dataloaders
+        train_loader, val_loader, normalizer = dataloaders
     else:
-        train_loader, test_loader = dataloaders
+        train_loader, val_loader = dataloaders
         normalizer = None
 
     sample_x, sample_y = next(iter(train_loader))
@@ -147,8 +148,8 @@ def main() -> None:
         total_samples = 0
 
         for xb, yb in train_loader:
-            xb = xb.to(device)
-            yb = yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
             pred = model(xb)
@@ -163,7 +164,7 @@ def main() -> None:
         epoch_train_l2 = running_loss / total_samples
         
         # Evaluate on the validation set every epoch.
-        epoch_val_mse = evaluate_mse(model, test_loader, device, normalizer)
+        epoch_val_mse = evaluate_mse(model, val_loader, device, normalizer)
         
         # Log current learning rate for traceability.
         current_lr = optimizer.param_groups[0]["lr"]
@@ -174,9 +175,11 @@ def main() -> None:
             scheduler.step()
 
     final_train_mse = evaluate_mse(model, train_loader, device, normalizer)
-    final_test_mse = evaluate_mse(model, test_loader, device, normalizer)
+    final_val_mse = evaluate_mse(model, val_loader, device, normalizer)
 
     print("\nFinal metrics")
+    print(f"scenarios_dir: {args.scenario_dir}")
+    print(f"validation_run_name: {args.validation_run_name}")
     print(f"device: {device}")
     print(f"normalize: {args.normalize}")
     print(f"scheduler_enabled: {not args.disable_scheduler}")
@@ -189,7 +192,7 @@ def main() -> None:
         print(f"output_mean: {normalizer.output_mean}")
         print(f"output_std: {normalizer.output_std}")
     print(f"train_mse: {final_train_mse:.6f}")
-    print(f"test_mse: {final_test_mse:.6f}")
+    print(f"val_mse: {final_val_mse:.6f}")
 
 
 if __name__ == "__main__":

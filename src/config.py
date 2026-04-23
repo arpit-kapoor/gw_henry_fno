@@ -11,13 +11,15 @@ def add_scenario_arg(
     required: bool,
     default: Optional[Path] = None,
 ) -> None:
-    """Register the scenario directory CLI argument."""
+    """Register the scenarios directory CLI argument."""
     parser.add_argument(
         "--scenario-dir",
+        "--scenarios-dir",
+        dest="scenario_dir",
         type=Path,
         required=required,
         default=default,
-        help="Path to one scenario directory containing run_*/windows.npz",
+        help="Path to scenarios directory containing scenario_*/run_*/windows.npz",
     )
 
 
@@ -70,6 +72,15 @@ def add_split_and_seed_args(
 ) -> None:
     """Register train/validation split and reproducibility arguments."""
     parser.add_argument("--train-ratio", type=float, default=default_train_ratio, help="Run-level train split ratio")
+    parser.add_argument(
+        "--validation-run-name",
+        type=str,
+        default=None,
+        help=(
+            "If provided (e.g., run_000003), use this run as validation in each scenario; "
+            "otherwise use random run-level split"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=default_seed, help="Random seed for split and training")
 
 
@@ -134,9 +145,9 @@ def validate_common_args(parser: argparse.ArgumentParser, args: argparse.Namespa
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Create the standard parser for single-scenario training."""
+    """Create the standard parser for training across all scenarios."""
     parser = argparse.ArgumentParser(
-        description="Train FNO on a single Henry coupling scenario",
+        description="Train FNO across all Henry scenarios with run-level train/validation split",
     )
 
     add_scenario_arg(parser, required=True)

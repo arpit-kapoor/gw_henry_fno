@@ -26,12 +26,12 @@ class ModelSizeConfig:
 
 MODEL_SIZE_PRESETS: dict[str, ModelSizeConfig] = {
     # Presets inspired by coordinated scaling used in PDE surrogate benchmarks.
-    "tiny": ModelSizeConfig("tiny", hidden_channels=4, n_modes_x=4, n_modes_y=8, n_layers=4),
-    "small": ModelSizeConfig("small", hidden_channels=8, n_modes_x=8, n_modes_y=16, n_layers=4),
-    "medium": ModelSizeConfig("medium", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=6),
-    "large": ModelSizeConfig("large", hidden_channels=32, n_modes_x=12, n_modes_y=24, n_layers=6),
-    "huge": ModelSizeConfig("huge", hidden_channels=48, n_modes_x=16, n_modes_y=32, n_layers=6),
-    "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=24, n_modes_y=48, n_layers=8),
+    "tiny": ModelSizeConfig("tiny", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=2),
+    "small": ModelSizeConfig("small", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=4),
+    "medium": ModelSizeConfig("medium", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=6),
+    "large": ModelSizeConfig("large", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=12),
+    "huge": ModelSizeConfig("huge", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=16),
+    "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=18),
 }
 
 
@@ -58,6 +58,7 @@ SWEEP_RESULT_FIELDNAMES = [
     "train_mse_denorm_channels",
     "val_mse_denorm_channels",
     "epochs",
+    "eval_every",
     "batch_size",
     "learning_rate",
     "weight_decay",
@@ -68,19 +69,44 @@ SWEEP_RESULT_FIELDNAMES = [
     "device",
     "val_final_step_npz",
     "val_final_step_plot",
+    "loss_curve_plot",
+    "per_scenario_train_metrics",
+    "per_scenario_val_metrics",
+    "per_scenario_train_plots",
+    "per_scenario_val_plots",
+]
+
+
+SWEEP_PER_SCENARIO_RESULT_FIELDNAMES = [
+    "timestamp",
+    "scenario_collection",
+    "validation_tag",
+    "scenario_name",
+    "model_size_label",
+    "hidden_channels",
+    "n_modes_x",
+    "n_modes_y",
+    "n_layers",
+    "eval_every",
+    "train_l2",
+    "train_mse",
+    "val_l2",
+    "val_mse",
+    "train_plot",
+    "val_plot",
 ]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train multiple FNO models for one scenario and append results to CSV",
+        description="Train multiple FNO models across all scenarios and append results to CSV",
     )
 
     add_scenario_arg(
         parser,
         required=False,
         default=Path(
-            "/Users/akap5486/Projects/groundwater/data/henry_data/all_scenarios/coupling_scenarios/scenario_01"
+            "/Users/akap5486/Projects/groundwater/data/henry_data/all_scenarios/coupling_scenarios"
         ),
     )
     # Keep defaults aligned with current run_training.sh.
@@ -133,6 +159,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="validation_final_step_artifacts",
         help="Subdirectory under results-dir for final-step prediction artifacts",
+    )
+
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=1,
+        help="Run validation every N epochs during training (always validates on final epoch)",
     )
 
     return parser
