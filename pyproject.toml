@@ -5,6 +5,7 @@ description = "Computational Experiments for Approximation Theory for FNO in Cou
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "ipywidgets>=8.1.8",
     "matplotlib>=3.10.8",
     "opt-einsum>=3.4.0",
     "packaging>=26.0",
