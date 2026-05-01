@@ -26,12 +26,13 @@ class ModelSizeConfig:
 
 MODEL_SIZE_PRESETS: dict[str, ModelSizeConfig] = {
     # Presets inspired by coordinated scaling used in PDE surrogate benchmarks.
-    "tiny": ModelSizeConfig("tiny", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=2),
-    "small": ModelSizeConfig("small", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=4),
-    "medium": ModelSizeConfig("medium", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=6),
-    "large": ModelSizeConfig("large", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=12),
-    "huge": ModelSizeConfig("huge", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=16),
-    "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=18),
+    "tiny": ModelSizeConfig("tiny", hidden_channels=8, n_modes_x=4, n_modes_y=8, n_layers=2),
+    "small": ModelSizeConfig("small", hidden_channels=8, n_modes_x=6, n_modes_y=12, n_layers=3),
+    "base": ModelSizeConfig("base", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=4),
+    "medium": ModelSizeConfig("medium", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=4),
+    "large": ModelSizeConfig("large", hidden_channels=32, n_modes_x=12, n_modes_y=24, n_layers=6),
+    "huge": ModelSizeConfig("huge", hidden_channels=42, n_modes_x=12, n_modes_y=24, n_layers=8),
+    # "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=18),
 }
 
 

@@ -24,8 +24,7 @@ SCENARIOS_ROOT="$PBS_JOBFS/grid_scenarios_20x40/scenarios"
 
 # Activate the virtual environment if it exists, otherwise use the system Python
 PYTHON_BIN=".venv/bin/python"
-# MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
-MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
+MODEL_SIZE_PRESETS="tiny,small,medium,large,huge"
 
 if [ ! -x "${PYTHON_BIN}" ]; then
       echo "Python executable not found or not executable: ${PYTHON_BIN}"
@@ -56,7 +55,10 @@ echo "============================================================"
                   --pin-memory \
                   --scheduler-step-size 50 \
                   --scheduler-decay 0.80 \
-                  --validation-run-name "run_000003"
+                  --seed 321 \
+                  --validation-run-name "run_000003" \
+                  --results-dir "results/training_06"
+
 
 status=$?
 if [ ${status} -ne 0 ]; then
