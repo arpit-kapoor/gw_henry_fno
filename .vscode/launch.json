@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: FNO Sweep (preset sizes)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/train_fno_sweep.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "--scenario-dir",
+        "/Users/arpitkapoor/Projects/groundwater/data/henry_data/grid_scenarios_20x40/scenarios",
+        "--sweep-mode",
+        "preset",
+        "--model-size-presets",
+        "small",
+        "--epochs",
+        "5",
+        "--batch-size",
+        "128",
+        "--learning-rate",
+        "8e-4",
+        "--train-ratio",
+        "0.7",
+        "--num-workers",
+        "4",
+        "--pin-memory",
+        "--validation-run-name",
+        "run_000003"
+      ]
+    }
+  ]
+}

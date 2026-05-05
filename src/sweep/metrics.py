@@ -58,7 +58,7 @@ def evaluate_channel_metrics(
 
             if rel_l2_norm_sum is None:
                 channels = rel_l2_norm.shape[1]
-                rel_l2_norm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+                rel_l2_norm_sum = torch.zeros(channels, dtype=torch.float32, device=device)
                 rel_l2_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
                 mse_norm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
                 mse_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
