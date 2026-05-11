@@ -24,15 +24,41 @@ class ModelSizeConfig:
     n_layers: int
 
 
+# MODEL_SIZE_PRESETS: dict[str, ModelSizeConfig] = {
+#     # Presets inspired by coordinated scaling used in PDE surrogate benchmarks.
+#     "tiny": ModelSizeConfig("tiny", hidden_channels=8, n_modes_x=4, n_modes_y=8, n_layers=2),
+#     "small": ModelSizeConfig("small", hidden_channels=8, n_modes_x=6, n_modes_y=12, n_layers=3),
+#     "medium": ModelSizeConfig("medium", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=4),
+#     "base": ModelSizeConfig("base", hidden_channels=32, n_modes_x=8, n_modes_y=16, n_layers=4),
+#     "large": ModelSizeConfig("large", hidden_channels=32, n_modes_x=12, n_modes_y=24, n_layers=6),
+#     "huge": ModelSizeConfig("huge", hidden_channels=48, n_modes_x=12, n_modes_y=24, n_layers=8),
+#     "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=16, n_modes_y=32, n_layers=8),
+# }
+
+# Scaling factors for the model size presets.
+scaling_factors = {
+    "tiny": 0.25,
+    "small": 0.50,
+    "medium": 0.75,
+    "base": 1.00,
+    "large": 1.25,
+    "huge": 1.50,
+    "massive": 1.75,
+}
+
+# Base model size configuration.
+base_model_size_config = ModelSizeConfig("base", hidden_channels=32, n_modes_x=8, n_modes_y=16, n_layers=4)
+
+# Model size presets.
 MODEL_SIZE_PRESETS: dict[str, ModelSizeConfig] = {
-    # Presets inspired by coordinated scaling used in PDE surrogate benchmarks.
-    "tiny": ModelSizeConfig("tiny", hidden_channels=8, n_modes_x=4, n_modes_y=8, n_layers=2),
-    "small": ModelSizeConfig("small", hidden_channels=8, n_modes_x=6, n_modes_y=12, n_layers=3),
-    "medium": ModelSizeConfig("medium", hidden_channels=16, n_modes_x=8, n_modes_y=16, n_layers=4),
-    "base": ModelSizeConfig("base", hidden_channels=32, n_modes_x=8, n_modes_y=16, n_layers=4),
-    "large": ModelSizeConfig("large", hidden_channels=32, n_modes_x=12, n_modes_y=24, n_layers=6),
-    "huge": ModelSizeConfig("huge", hidden_channels=42, n_modes_x=12, n_modes_y=24, n_layers=8),
-    # "massive": ModelSizeConfig("massive", hidden_channels=64, n_modes_x=8, n_modes_y=16, n_layers=18),
+    name: ModelSizeConfig(
+        label=name,
+        hidden_channels=int(base_model_size_config.hidden_channels * scaling_factors[name]),
+        n_modes_x=int(base_model_size_config.n_modes_x * scaling_factors[name]),
+        n_modes_y=int(base_model_size_config.n_modes_y * scaling_factors[name]),
+        n_layers=int(base_model_size_config.n_layers * scaling_factors[name]),
+    )
+    for name in scaling_factors.keys()
 }
 
 
