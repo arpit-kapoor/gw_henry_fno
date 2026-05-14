@@ -26,7 +26,7 @@ unzip "/scratch/yl75/ak4177/data/henry_data/${SETTING_NAME}.zip" -d $PBS_JOBFS/
 SCENARIOS_ROOT="$PBS_JOBFS/${SETTING_NAME}/scenarios"
 
 # Results directory for storing the outputs of the sweep
-RESULTS_DIR="/scratch/yl75/ak4177/results/fno_sweep_hidden_dims/$SETTING_NAME"
+RESULTS_DIR="/scratch/yl75/ak4177/results/groundwater/fno_henry_sweep/${SETTING_NAME}"
 
 # Activate the virtual environment if it exists, otherwise use the system Python
 PYTHON_BIN=".venv/bin/python"
