@@ -1,0 +1,74 @@
+#!/bin/bash
+#PBS -P yl75
+#PBS -l walltime=12:00:00
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=95GB
+#PBS -l jobfs=10GB
+#PBS -l wd
+#PBS -l storage=scratch/yl75
+#PBS -N fno_sweep_henry
+#PBS -o logs/sweep_hidden_dims.out
+#PBS -j oe
+
+
+# Get to the project directory
+cd $PBS_O_WORKDIR/..
+
+# Problem setting name for organizing results
+SETTING_NAME="grid_scenarios_dynamic_storage_20x40"
+
+# Extract the data to a temporary directory on the compute node
+unzip "/scratch/yl75/ak4177/data/henry_data/${SETTING_NAME}.zip" -d $PBS_JOBFS/
+
+# Set up the scenarios root directory
+SCENARIOS_ROOT="$PBS_JOBFS/${SETTING_NAME}/scenarios"
+
+# Results directory for storing the outputs of the sweep
+RESULTS_DIR="/scratch/yl75/ak4177/results/groundwater/fno_henry_sweep/${SETTING_NAME}"
+
+# Activate the virtual environment if it exists, otherwise use the system Python
+PYTHON_BIN=".venv/bin/python"
+MODEL_SIZE_PRESETS="tiny,small,medium,base,large,huge,massive"
+# MODEL_SIZE_PRESETS="massive"
+
+if [ ! -x "${PYTHON_BIN}" ]; then
+      echo "Python executable not found or not executable: ${PYTHON_BIN}"
+      exit 1
+fi
+
+if [ ! -d "${SCENARIOS_ROOT}" ]; then
+      echo "Scenarios root directory not found: ${SCENARIOS_ROOT}"
+      exit 1
+fi
+
+echo "============================================================"
+echo "Running sweep for scenarios root: ${SCENARIOS_ROOT}"
+echo "Model size presets: ${MODEL_SIZE_PRESETS}"
+echo "============================================================"
+
+
+# Run the training script with the specified parameters
+"${PYTHON_BIN}" train_fno_sweep.py \
+                  --scenarios-dir "${SCENARIOS_ROOT}" \
+                  --sweep-mode preset \
+                  --model-size-presets "${MODEL_SIZE_PRESETS}" \
+                  --epochs 500 \
+                  --batch-size 512 \
+                  --learning-rate 8e-4 \
+                  --train-ratio 0.7 \
+                  --num-workers 4 \
+                  --pin-memory \
+                  --scheduler-step-size 50 \
+                  --scheduler-decay 0.80 \
+                  --seed 321 \
+                  --validation-run-name "run_000003" \
+                  --results-dir $RESULTS_DIR
+
+
+status=$?
+if [ ${status} -ne 0 ]; then
+      echo "Sweep failed with exit code ${status}"
+      exit ${status}
+fi
