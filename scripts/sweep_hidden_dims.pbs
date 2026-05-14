@@ -16,15 +16,22 @@
 # Get to the project directory
 cd $PBS_O_WORKDIR/..
 
+# Problem setting name for organizing results
+SETTING_NAME="grid_scenarios_static_20x40"
+
 # Extract the data to a temporary directory on the compute node
-unzip /scratch/yl75/ak4177/data/henry_data/grid_scenarios_dynamic_20x40.zip -d $PBS_JOBFS/
+unzip "/scratch/yl75/ak4177/data/henry_data/${SETTING_NAME}.zip" -d $PBS_JOBFS/
 
 # Set up the scenarios root directory
-SCENARIOS_ROOT="$PBS_JOBFS/grid_scenarios_dynamic_20x40/scenarios"
+SCENARIOS_ROOT="$PBS_JOBFS/${SETTING_NAME}/scenarios"
+
+# Results directory for storing the outputs of the sweep
+RESULTS_DIR="/scratch/yl75/ak4177/results/fno_sweep_hidden_dims/$SETTING_NAME"
 
 # Activate the virtual environment if it exists, otherwise use the system Python
 PYTHON_BIN=".venv/bin/python"
-MODEL_SIZE_PRESETS="tiny,small,medium,base,large,huge"
+MODEL_SIZE_PRESETS="tiny,small,medium,base,large,huge,massive"
+# MODEL_SIZE_PRESETS="massive"
 
 if [ ! -x "${PYTHON_BIN}" ]; then
       echo "Python executable not found or not executable: ${PYTHON_BIN}"
@@ -57,7 +64,7 @@ echo "============================================================"
                   --scheduler-decay 0.80 \
                   --seed 321 \
                   --validation-run-name "run_000003" \
-                  --results-dir "results/training_06_dynamic"
+                  --results-dir $RESULTS_DIR
 
 
 status=$?
