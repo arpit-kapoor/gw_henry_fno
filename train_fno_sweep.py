@@ -13,14 +13,17 @@ from src.sweep import (
     ModelSizeConfig,
     append_result_row,
     build_parser,
+    evaluate_rollout_metrics,
     parse_hidden_channels,
     parse_model_size_presets,
+    save_rollout_artifacts,
     save_split_final_step_artifacts,
     save_training_validation_loss_plot,
     save_validation_final_step_artifacts,
     train_one_model,
 )
 from src.sweep.metrics import evaluate_l2
+from src.sweep.rollout import _collect_run_windows, autoregressive_rollout
 from train_fno import evaluate_mse, resolve_device, set_seed
 
 
@@ -229,6 +232,91 @@ def main() -> None:
                 f"val={val_msg if val_msg is not None else 'n/a'}"
             )
 
+        # --- Autoregressive rollout evaluation (val + train splits) ---------
+        # evaluate_rollout_metrics runs one pass over all runs and returns
+        # both overall and per-scenario metrics.
+        print(f"Running autoregressive rollout on val set for {config.label} ...")
+        val_rollout = evaluate_rollout_metrics(
+            model=result.model,
+            dataset=val_dataset,
+            device=device,
+            normalizer=result.normalizer,
+        )
+        print(
+            f"  val_rollout_mse={val_rollout['rollout_mse']:.6f} | "
+            f"val_rollout_l2={val_rollout['rollout_l2']:.6f} | "
+            f"n_runs={val_rollout['n_runs']} | n_steps={val_rollout['n_steps_total']}"
+        )
+        print(
+            f"  val_rollout_mse_channels={[f'{v:.6f}' for v in val_rollout['rollout_mse_channels']]} | "
+            f"val_rollout_l2_channels={[f'{v:.6f}' for v in val_rollout['rollout_l2_channels']]}"
+        )
+
+        print(f"Running autoregressive rollout on train set for {config.label} ...")
+        train_rollout = evaluate_rollout_metrics(
+            model=result.model,
+            dataset=train_dataset,
+            device=device,
+            normalizer=result.normalizer,
+        )
+        print(
+            f"  train_rollout_mse={train_rollout['rollout_mse']:.6f} | "
+            f"train_rollout_l2={train_rollout['rollout_l2']:.6f} | "
+            f"n_runs={train_rollout['n_runs']} | n_steps={train_rollout['n_steps_total']}"
+        )
+        print(
+            f"  train_rollout_mse_channels={[f'{v:.6f}' for v in train_rollout['rollout_mse_channels']]} | "
+            f"train_rollout_l2_channels={[f'{v:.6f}' for v in train_rollout['rollout_l2_channels']]}"
+        )
+
+        # Derive output channel names (same for both splits).
+        state_ch_names = [
+            val_rollout["channel_names"][i]
+            for i in val_rollout["state_channel_indices"]
+        ]
+
+        # Save rollout trajectory artifact for the first val run.
+        first_val_inputs, first_val_outputs = _collect_run_windows(val_dataset, 0)
+        val_rollout_preds_art, val_gt_art = autoregressive_rollout(
+            model=result.model,
+            run_inputs=first_val_inputs,
+            run_outputs=first_val_outputs,
+            state_channel_indices=val_rollout["state_channel_indices"],
+            device=device,
+            normalizer=result.normalizer,
+        )
+        val_rollout_npz, val_rollout_plot = save_rollout_artifacts(
+            rollout_preds=val_rollout_preds_art,
+            ground_truth=val_gt_art,
+            output_dir=artifact_dir / "rollout",
+            scenario_name=f"{scenarios_dir.name}_{validation_tag}",
+            model_size_label=f"{config.label}_val",
+            hidden_channels=config.hidden_channels,
+            channel_names=state_ch_names,
+        )
+        print(f"  val rollout artifacts: {val_rollout_npz.name}, {val_rollout_plot.name}")
+
+        # Save rollout trajectory artifact for the first train run.
+        first_train_inputs, first_train_outputs = _collect_run_windows(train_dataset, 0)
+        train_rollout_preds_art, train_gt_art = autoregressive_rollout(
+            model=result.model,
+            run_inputs=first_train_inputs,
+            run_outputs=first_train_outputs,
+            state_channel_indices=train_rollout["state_channel_indices"],
+            device=device,
+            normalizer=result.normalizer,
+        )
+        train_rollout_npz, train_rollout_plot = save_rollout_artifacts(
+            rollout_preds=train_rollout_preds_art,
+            ground_truth=train_gt_art,
+            output_dir=artifact_dir / "rollout",
+            scenario_name=f"{scenarios_dir.name}_{validation_tag}",
+            model_size_label=f"{config.label}_train",
+            hidden_channels=config.hidden_channels,
+            channel_names=state_ch_names,
+        )
+        print(f"  train rollout artifacts: {train_rollout_npz.name}, {train_rollout_plot.name}")
+
         # Append one row per model config so downstream analysis can compare
         # architecture choices within a scenario.
         row = {
@@ -253,6 +341,26 @@ def main() -> None:
             "val_mse_norm_channels": result.val_mse_norm_channels,
             "train_mse_denorm_channels": result.train_mse_denorm_channels,
             "val_mse_denorm_channels": result.val_mse_denorm_channels,
+            # Autoregressive rollout metrics — val split
+            "val_rollout_mse": f"{val_rollout['rollout_mse']:.6f}",
+            "val_rollout_l2": f"{val_rollout['rollout_l2']:.6f}",
+            "val_rollout_mse_channels": json.dumps(val_rollout["rollout_mse_channels"]),
+            "val_rollout_l2_channels": json.dumps(val_rollout["rollout_l2_channels"]),
+            "val_rollout_n_runs": val_rollout["n_runs"],
+            "val_rollout_n_steps": val_rollout["n_steps_total"],
+            "val_rollout_state_channels": json.dumps(val_rollout["state_channel_indices"]),
+            "val_rollout_channel_names": json.dumps(val_rollout["channel_names"]),
+            "val_rollout_artifact_npz": str(val_rollout_npz),
+            "val_rollout_artifact_plot": str(val_rollout_plot),
+            # Autoregressive rollout metrics — train split
+            "train_rollout_mse": f"{train_rollout['rollout_mse']:.6f}",
+            "train_rollout_l2": f"{train_rollout['rollout_l2']:.6f}",
+            "train_rollout_mse_channels": json.dumps(train_rollout["rollout_mse_channels"]),
+            "train_rollout_l2_channels": json.dumps(train_rollout["rollout_l2_channels"]),
+            "train_rollout_n_runs": train_rollout["n_runs"],
+            "train_rollout_n_steps": train_rollout["n_steps_total"],
+            "train_rollout_artifact_npz": str(train_rollout_npz),
+            "train_rollout_artifact_plot": str(train_rollout_plot),
             "epochs": args.epochs,
             "eval_every": args.eval_every,
             "batch_size": args.batch_size,
@@ -276,6 +384,14 @@ def main() -> None:
         for scenario_name in scenario_names:
             scenario_train = per_scenario_train_metrics.get(scenario_name, {})
             scenario_val = per_scenario_val_metrics.get(scenario_name, {})
+
+            # Extract per-scenario rollout metrics from the single-pass result.
+            s_val_rollout = val_rollout["per_scenario"].get(scenario_name, {})
+            s_train_rollout = train_rollout["per_scenario"].get(scenario_name, {})
+
+            def _fmt_rollout(v):
+                return f"{v:.6f}" if v is not None else ""
+
             per_scenario_row = {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "scenario_collection": scenarios_dir.name,
@@ -293,6 +409,19 @@ def main() -> None:
                 "val_mse": scenario_val.get("val_mse", ""),
                 "train_plot": per_scenario_train_plots.get(scenario_name, ""),
                 "val_plot": per_scenario_val_plots.get(scenario_name, ""),
+                # Per-scenario rollout metrics
+                "val_rollout_mse": _fmt_rollout(s_val_rollout.get("rollout_mse")),
+                "val_rollout_l2": _fmt_rollout(s_val_rollout.get("rollout_l2")),
+                "val_rollout_mse_channels": json.dumps(s_val_rollout.get("rollout_mse_channels")),
+                "val_rollout_l2_channels": json.dumps(s_val_rollout.get("rollout_l2_channels")),
+                "val_rollout_n_runs": s_val_rollout.get("n_runs", ""),
+                "val_rollout_n_steps": s_val_rollout.get("n_steps_total", ""),
+                "train_rollout_mse": _fmt_rollout(s_train_rollout.get("rollout_mse")),
+                "train_rollout_l2": _fmt_rollout(s_train_rollout.get("rollout_l2")),
+                "train_rollout_mse_channels": json.dumps(s_train_rollout.get("rollout_mse_channels")),
+                "train_rollout_l2_channels": json.dumps(s_train_rollout.get("rollout_l2_channels")),
+                "train_rollout_n_runs": s_train_rollout.get("n_runs", ""),
+                "train_rollout_n_steps": s_train_rollout.get("n_steps_total", ""),
             }
             append_result_row(per_scenario_csv_path, per_scenario_row, per_scenario_fieldnames)
 
@@ -301,7 +430,8 @@ def main() -> None:
             f"params={result.total_params} | "
             f"train_l2={result.final_train_l2:.6f} | val_l2={result.final_val_l2:.6f} | "
             f"train_mse={result.final_train_mse:.6f} | val_mse={result.final_val_mse:.6f} | "
-            f"val_rel_l2_denorm_channels={result.val_rel_l2_denorm_channels} | "
+            f"val_rollout_mse={val_rollout['rollout_mse']:.6f} | "
+            f"train_rollout_mse={train_rollout['rollout_mse']:.6f} | "
             f"saved_npz={npz_artifact_path.name} | "
             f"saved_plot={plot_artifact_path.name} | "
             f"saved_loss_curve={loss_curve_plot_path.name}"

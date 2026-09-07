@@ -271,3 +271,130 @@ def save_training_validation_loss_plot(
     plt.close(fig)
 
     return fig_path
+
+
+def save_rollout_artifacts(
+    rollout_preds: "torch.Tensor",
+    ground_truth: "torch.Tensor",
+    output_dir: Path,
+    scenario_name: str,
+    model_size_label: str,
+    hidden_channels: int,
+    channel_names: list[str] | None = None,
+) -> tuple[Path, Path]:
+    """Save autoregressive rollout trajectory arrays and a comparison plot.
+
+    Saves a compressed ``.npz`` with the full rollout trajectory and a PNG
+    comparing ground-truth vs rollout at the **final** timestep plus a
+    per-channel absolute-error profile across all timesteps.
+
+    Parameters
+    ----------
+    rollout_preds:
+        Rollout predictions in denormalized space, shape ``(T, C_out, H, W)``.
+    ground_truth:
+        Ground-truth outputs in denormalized space, shape ``(T, C_out, H, W)``.
+    output_dir:
+        Directory where artifacts are written.
+    scenario_name:
+        Used in file names and plot titles.
+    model_size_label:
+        Used in file names and plot titles.
+    hidden_channels:
+        Used in plot title.
+    channel_names:
+        Optional list of output channel names for axis labels.
+
+    Returns
+    -------
+    npz_path, fig_path
+    """
+    import torch  # local import to keep module-level deps minimal
+
+    T, C_out = rollout_preds.shape[0], rollout_preds.shape[1]
+    abs_error = (rollout_preds - ground_truth).abs()  # (T, C_out, H, W)
+
+    # ------------------------------------------------------------------ NPZ --
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_name = f"{scenario_name}_{model_size_label}_rollout"
+    npz_path = output_dir / f"{base_name}.npz"
+
+    np.savez_compressed(
+        npz_path,
+        rollout_preds=rollout_preds.numpy(),
+        ground_truth=ground_truth.numpy(),
+        abs_error=abs_error.numpy(),
+    )
+
+    # ----------------------------------------------------------------- Plot --
+    # Row 0: ground truth at final step
+    # Row 1: rollout prediction at final step
+    # Row 2: per-channel RMSE profile over all T steps
+    out_names = channel_names if channel_names else [f"Channel {i}" for i in range(C_out)]
+    if len(out_names) >= 2:
+        out_names = list(out_names)
+        if out_names[0] == "concentration_t":
+            out_names[0] = "Concentration"
+        if out_names[1] == "head_t":
+            out_names[1] = "Head"
+
+    gt_final = ground_truth[-1]    # (C_out, H, W)
+    pred_final = rollout_preds[-1]  # (C_out, H, W)
+
+    # Per-step, per-channel RMSE: (T, C_out)
+    rmse_profile = abs_error.flatten(start_dim=2).pow(2).mean(dim=-1).sqrt()  # (T, C_out)
+    timesteps = np.arange(T)
+
+    n_cols = C_out
+    fig, axes = plt.subplots(
+        3,
+        n_cols,
+        figsize=(max(6.0, 4.8 * n_cols), 11.4),
+        constrained_layout=True,
+    )
+    if n_cols == 1:
+        axes = np.array([[axes[0]], [axes[1]], [axes[2]]], dtype=object)
+
+    for ch in range(C_out):
+        gt_ch = gt_final[ch].numpy()
+        pred_ch = pred_final[ch].numpy()
+        vmin = float(min(gt_ch.min(), pred_ch.min()))
+        vmax = float(max(gt_ch.max(), pred_ch.max()))
+        ch_label = out_names[ch] if ch < len(out_names) else f"Channel {ch}"
+
+        ax_gt = axes[0, ch]
+        im_gt = ax_gt.imshow(gt_ch, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
+        ax_gt.set_title(f"GT (final step) – {ch_label}")
+        fig.colorbar(im_gt, ax=ax_gt, fraction=0.046, pad=0.04)
+
+        ax_pred = axes[1, ch]
+        im_pred = ax_pred.imshow(pred_ch, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
+        ax_pred.set_title(f"Rollout (final step) – {ch_label}")
+        fig.colorbar(im_pred, ax=ax_pred, fraction=0.046, pad=0.04)
+
+        ax_rmse = axes[2, ch]
+        ax_rmse.plot(timesteps, rmse_profile[:, ch].numpy(), linewidth=1.8, color="#d62728")
+        ax_rmse.set_xlabel("Rollout step")
+        ax_rmse.set_ylabel("RMSE")
+        ax_rmse.set_title(f"RMSE profile – {ch_label}")
+        ax_rmse.grid(True, linestyle="--", alpha=0.35)
+
+    for row in range(2):
+        for ch in range(C_out):
+            axes[row, ch].set_xlabel("x-index")
+            axes[row, ch].set_ylabel("z-index")
+
+    fig.suptitle(
+        (
+            f"Autoregressive Rollout | Scenario: {scenario_name} | "
+            f"size_preset={model_size_label} | hidden_channels={hidden_channels}"
+        ),
+        fontsize=11,
+        fontweight="bold",
+    )
+
+    fig_path = output_dir / f"{base_name}.png"
+    fig.savefig(fig_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+    return npz_path, fig_path

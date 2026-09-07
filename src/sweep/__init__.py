@@ -16,6 +16,13 @@ from .artifacts import (
     save_split_final_step_artifacts,
     save_training_validation_loss_plot,
     save_validation_final_step_artifacts,
+    save_rollout_artifacts,
+)
+from .rollout import (
+    autoregressive_rollout,
+    channel_indices_from_names,
+    evaluate_rollout_metrics,
+    resolve_channel_indices,
 )
 
 __all__ = [
@@ -25,9 +32,14 @@ __all__ = [
     "ModelSizeConfig",
     "TrainOneModelResult",
     "append_result_row",
+    "autoregressive_rollout",
     "build_parser",
+    "channel_indices_from_names",
+    "evaluate_rollout_metrics",
     "parse_hidden_channels",
     "parse_model_size_presets",
+    "resolve_channel_indices",
+    "save_rollout_artifacts",
     "save_split_final_step_artifacts",
     "save_training_validation_loss_plot",
     "save_validation_final_step_artifacts",
