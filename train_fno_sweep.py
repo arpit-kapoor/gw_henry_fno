@@ -307,6 +307,17 @@ def main() -> None:
             f"saved_loss_curve={loss_curve_plot_path.name}"
         )
 
+        # Clean up model, loaders, and memory before the next configuration
+        del result
+        del train_dataset
+        del val_dataset
+        if device.type == "mps":
+            torch.mps.empty_cache()
+        elif device.type == "cuda":
+            torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+
     print("=" * 60)
     print("Sweep finished")
     print(f"Results appended to: {csv_path}")

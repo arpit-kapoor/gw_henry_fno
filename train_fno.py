@@ -67,8 +67,8 @@ def evaluate_mse(
 
     with torch.no_grad():
         for xb, yb in dataloader:
-            xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
+            xb = xb.to(device, non_blocking=(device.type == "cuda"))
+            yb = yb.to(device, non_blocking=(device.type == "cuda"))
             pred = model(xb)
 
             # Denormalize if normalizer is provided

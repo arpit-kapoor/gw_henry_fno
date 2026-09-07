@@ -125,8 +125,8 @@ def train_one_model(
         total_samples = 0
 
         for xb, yb in train_loader:
-            xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
+            xb = xb.to(device, non_blocking=(device.type == "cuda"))
+            yb = yb.to(device, non_blocking=(device.type == "cuda"))
 
             optimizer.zero_grad(set_to_none=True)
             pred = model(xb)

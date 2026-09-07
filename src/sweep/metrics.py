@@ -58,15 +58,15 @@ def evaluate_channel_metrics(
 
             if rel_l2_norm_sum is None:
                 channels = rel_l2_norm.shape[1]
-                rel_l2_norm_sum = torch.zeros(channels, dtype=torch.float32, device=device)
-                rel_l2_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
-                mse_norm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
-                mse_denorm_sum = torch.zeros(channels, dtype=torch.float64, device=device)
+                rel_l2_norm_sum = torch.zeros(channels, dtype=torch.float64)
+                rel_l2_denorm_sum = torch.zeros(channels, dtype=torch.float64)
+                mse_norm_sum = torch.zeros(channels, dtype=torch.float64)
+                mse_denorm_sum = torch.zeros(channels, dtype=torch.float64)
 
-            rel_l2_norm_sum += rel_l2_norm.sum(dim=0, dtype=torch.float64)
-            rel_l2_denorm_sum += rel_l2_denorm.sum(dim=0, dtype=torch.float64)
-            mse_norm_sum += mse_norm.sum(dim=0, dtype=torch.float64)
-            mse_denorm_sum += mse_denorm.sum(dim=0, dtype=torch.float64)
+            rel_l2_norm_sum += rel_l2_norm.detach().cpu().sum(dim=0, dtype=torch.float64)
+            rel_l2_denorm_sum += rel_l2_denorm.detach().cpu().sum(dim=0, dtype=torch.float64)
+            mse_norm_sum += mse_norm.detach().cpu().sum(dim=0, dtype=torch.float64)
+            mse_denorm_sum += mse_denorm.detach().cpu().sum(dim=0, dtype=torch.float64)
 
             total_samples += xb.size(0)
 
