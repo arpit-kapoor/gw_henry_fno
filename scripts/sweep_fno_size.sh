@@ -36,7 +36,7 @@ fi
 
 MODEL_SIZE_PRESETS="${MODEL_SIZE_PRESETS:-tiny,small,medium,base,large,huge,massive}"
 # MODEL_SIZE_PRESETS="massive"
-DEVICE="${DEVICE:-mps}"  # Change to "cuda" if using a CUDA-capable GPU
+DEVICE="${DEVICE:-auto}"  # "auto" detects CUDA on Linux, MPS on macOS, or CPU fallback
 EPOCHS="${EPOCHS:-500}"
 BATCH_SIZE="${BATCH_SIZE:-512}"
 LEARNING_RATE="${LEARNING_RATE:-8e-4}"
