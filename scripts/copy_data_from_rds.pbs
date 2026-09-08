@@ -1,0 +1,27 @@
+#!/bin/bash
+
+#PBS -P yl75
+#PBS -N data-transfer
+#PBS -l walltime=04:00:00
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -W umask=022
+#PBS -q copyq
+#PBS -l wd
+#PBS -lstorage=scratch/yl75
+#PBS -o logs/data-transfer-from-rds.out
+
+# RDS:
+remote_user=${RDSUSER}
+remote_host=research-data-ext.sydney.edu.au
+
+# NOTE: Add a trailing slash (/) to remote_path if you don't want to create the
+# parent directory at the destination. 
+filename=grid_scenarios_20x40.tar.gz
+remote_path=/rds/${RDSPROJECT}/data/simple_henry/${filename}
+
+# Gadi:
+dest_path=/scratch/yl75/ak4177/data/simple_henry/
+
+# Copy folder with sftp
+sftp -r ${remote_user}@${remote_host}:${remote_path} ${dest_path}
