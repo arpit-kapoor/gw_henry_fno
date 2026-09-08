@@ -19,7 +19,7 @@ remote_host=research-data-ext.sydney.edu.au
 
 # NOTE: Add a trailing slash (/) to remote_path if you don't want to create the
 # parent directory at the destination. 
-remote_path=/rds/${RDSPROJECT}/data/simple_henry/
+remote_path=/rds/${RDSPROJECT}/results/simple_henry/
 
 # Gadi:
 results_dirname=grid_scenarios_20x40
