@@ -9,6 +9,7 @@
 #PBS -q copyq
 #PBS -l wd
 #PBS -lstorage=scratch/yl75
+#PBS -j oe
 #PBS -o logs/data-transfer-from-rds.out
 
 # RDS:

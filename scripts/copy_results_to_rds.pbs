@@ -1,0 +1,34 @@
+#!/bin/bash
+
+#PBS -P yl75
+#PBS -N results-transfer
+#PBS -l walltime=04:00:00
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -W umask=022
+#PBS -q copyq
+#PBS -l wd
+#PBS -lstorage=scratch/yl75
+#PBS -j oe
+#PBS -o logs/results-transfer-to-rds.out
+
+
+# RDS:
+remote_user=${RDSUSER}
+remote_host=research-data-ext.sydney.edu.au
+
+# NOTE: Add a trailing slash (/) to remote_path if you don't want to create the
+# parent directory at the destination. 
+remote_path=/rds/${RDSPROJECT}/data/simple_henry/
+
+# Gadi:
+results_dirname=grid_scenarios_20x40
+filename=${results_dirname}.tar.gz
+results_parent_path=/scratch/yl75/${USER}/results/groundwater/fno_simple_henry_sweep/
+
+# Create a tar of the results folder
+cd ${results_parent_path}
+tar -czf ${filename} ${results_dirname}
+
+# Copy tar with sftp
+sftp ${remote_user}@${remote_host}:${remote_path} <<< $"put -r ${filename}"
