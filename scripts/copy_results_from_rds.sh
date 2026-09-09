@@ -13,3 +13,7 @@ dest_path=${HOME}/Projects/groundwater/results/fno_henry_results/fno_simple_henr
 
 # Copy folder with sftp
 sftp -r ${remote_user}@${remote_host}:${remote_path} ${dest_path}
+
+# Extract the tar file
+cd ${dest_path}
+tar -xzf ${filename}
