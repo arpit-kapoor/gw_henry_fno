@@ -446,3 +446,146 @@ def evaluate_rollout_metrics(
     overall["per_scenario"] = per_scenario
     return overall
 
+
+# ---------------------------------------------------------------------------
+# Per-scenario prediction collection
+# ---------------------------------------------------------------------------
+
+
+def collect_predictions_by_scenario(
+    model: torch.nn.Module,
+    dataset: HenryScenarioDataset,
+    device: torch.device,
+    normalizer=None,
+) -> dict[str, dict[str, np.ndarray]]:
+    """Collect teacher-forced and rollout predictions grouped by scenario.
+
+    For each run in the dataset, computes:
+      - **targets**: denormalized ground-truth outputs
+      - **preds**: one-step-ahead teacher-forced predictions (denormalized)
+      - **preds_rollout**: autoregressive rollout predictions (denormalized)
+
+    Results are organised by scenario name.  Within each scenario, runs are
+    stacked along the first axis to produce arrays of shape
+    ``(N_runs, T, H, W, 2)`` where:
+      - ``N_runs`` — number of runs belonging to this scenario in this split
+      - ``T``      — number of timestep windows per run
+      - ``H, W``   — spatial grid dimensions
+      - ``2``      — output channels (concentration index 0, hydraulic head index 1)
+
+    Parameters
+    ----------
+    model:
+        Trained FNO (eval mode is set internally).
+    dataset:
+        A :class:`~src.data.henry_scenario_dataset.HenryScenarioDataset` instance
+        (train or val split).
+    device:
+        Torch device for inference.
+    normalizer:
+        Optional normalizer used during training.  Must match what was applied
+        when constructing ``dataset``.
+
+    Returns
+    -------
+    dict mapping scenario name -> dict with keys
+        ``"targets"``, ``"preds"``, ``"preds_rollout"`` — each ``np.ndarray``
+        of shape ``(N_runs, T, H, W, 2)``.
+    """
+    state_indices, _, _ = resolve_channel_indices(dataset)
+
+    # Group run indices by scenario.
+    scenario_run_indices: dict[str, list[int]] = {}
+    for run_idx, (scenario_idx, _) in enumerate(dataset.run_refs):
+        scenario_name = dataset.scenario_dirs[scenario_idx].name
+        scenario_run_indices.setdefault(scenario_name, []).append(run_idx)
+
+    model.eval()
+    results: dict[str, dict[str, np.ndarray]] = {}
+
+    for scenario_name, run_indices in scenario_run_indices.items():
+        targets_list: list[np.ndarray] = []
+        preds_list: list[np.ndarray] = []
+        preds_rollout_list: list[np.ndarray] = []
+
+        for run_idx in run_indices:
+            run_inputs, run_outputs = _collect_run_windows(dataset, run_idx)
+            # run_inputs:  (T, C_in, H, W) — normalized if normalizer is set
+            # run_outputs: (T, C_out, H, W) — normalized if normalizer is set
+
+            # ------ Teacher-forced one-step predictions ------
+            with torch.no_grad():
+                xb = run_inputs.to(device)            # (T, C_in, H, W)
+                pred_norm = model(xb)                 # (T, C_out, H, W)
+                if normalizer is not None:
+                    pred_denorm = normalizer.denormalize_output(pred_norm)
+                    gt_denorm_onestep = normalizer.denormalize_output(run_outputs.to(device))
+                else:
+                    pred_denorm = pred_norm
+                    gt_denorm_onestep = run_outputs.to(device)
+
+            # (T, C_out, H, W) -> (T, H, W, C_out)
+            preds_np = pred_denorm.detach().cpu().permute(0, 2, 3, 1).numpy()          # (T, H, W, 2)
+            targets_np = gt_denorm_onestep.detach().cpu().permute(0, 2, 3, 1).numpy()  # (T, H, W, 2)
+
+            # ------ Autoregressive rollout ------
+            rollout_preds, _ = autoregressive_rollout(
+                model=model,
+                run_inputs=run_inputs,
+                run_outputs=run_outputs,
+                state_channel_indices=state_indices,
+                device=device,
+                normalizer=normalizer,
+            )
+            # rollout_preds: (T, C_out, H, W) denormalized -> (T, H, W, 2)
+            preds_rollout_np = rollout_preds.permute(0, 2, 3, 1).numpy()
+
+            targets_list.append(targets_np)
+            preds_list.append(preds_np)
+            preds_rollout_list.append(preds_rollout_np)
+
+        # Stack runs: list of (T, H, W, 2) -> (N_runs, T, H, W, 2)
+        results[scenario_name] = {
+            "targets": np.stack(targets_list, axis=0),
+            "preds": np.stack(preds_list, axis=0),
+            "preds_rollout": np.stack(preds_rollout_list, axis=0),
+        }
+
+    return results
+
+
+def compute_rollout_rel_l2_per_channel(
+    targets: np.ndarray,
+    preds_rollout: np.ndarray,
+) -> tuple[float, float]:
+    """Compute relative L2 error per output channel from rollout arrays.
+
+    Both inputs have shape ``(N, T, H, W, 2)``.  The relative L2 is computed
+    by flattening ``(T, H, W)`` into a single vector per run per channel and
+    then averaging over all ``N`` runs.
+
+    Parameters
+    ----------
+    targets:
+        Denormalized ground-truth array, shape ``(N, T, H, W, 2)``.
+    preds_rollout:
+        Denormalized rollout prediction array, shape ``(N, T, H, W, 2)``.
+
+    Returns
+    -------
+    rel_l2_ch0, rel_l2_ch1
+        Scalar relative L2 error for channel 0 (concentration) and
+        channel 1 (hydraulic head), averaged over all runs.
+    """
+    N = targets.shape[0]
+    # Flatten spatial+temporal dims: (N, T, H, W, 2) -> (N, T*H*W, 2)
+    flat_targets = targets.reshape(N, -1, 2)
+    flat_preds = preds_rollout.reshape(N, -1, 2)
+
+    diff = flat_preds - flat_targets                   # (N, T*H*W, 2)
+    diff_norm = np.linalg.norm(diff, axis=1)           # (N, 2)
+    gt_norm = np.linalg.norm(flat_targets, axis=1)     # (N, 2)
+    rel_l2 = diff_norm / (gt_norm + 1e-12)             # (N, 2)
+
+    mean_rel_l2 = rel_l2.mean(axis=0)                  # (2,)
+    return float(mean_rel_l2[0]), float(mean_rel_l2[1])

@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Python: FNO Sweep (preset sizes)",
+      "name": "Python: Sweep FNO Size (sweep_fno_size.sh)",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/train_fno_sweep.py",
@@ -10,17 +10,20 @@
       "cwd": "${workspaceFolder}",
       "justMyCode": false,
       "python": "${workspaceFolder}/.venv/bin/python",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
       "args": [
-        "--scenario-dir",
-        "/Users/arpitkapoor/Projects/groundwater/data/henry_data/grid_scenarios_20x40/scenarios",
+        "--scenarios-dir",
+        "${userHome}/Projects/groundwater/data/simple_henry_data/grid_scenarios_20x40/scenarios",
         "--sweep-mode",
         "preset",
         "--model-size-presets",
-        "small",
+        "tiny,small,medium,base,large,huge,massive",
         "--epochs",
-        "5",
+        "500",
         "--batch-size",
-        "128",
+        "512",
         "--learning-rate",
         "8e-4",
         "--train-ratio",
@@ -28,8 +31,62 @@
         "--num-workers",
         "4",
         "--pin-memory",
+        "--scheduler-step-size",
+        "50",
+        "--scheduler-decay",
+        "0.80",
+        "--seed",
+        "321",
         "--validation-run-name",
-        "run_000003"
+        "run_000003",
+        "--results-dir",
+        "${userHome}/Projects/groundwater/results/fno_simple_henry_sweep/grid_scenarios_20x40",
+        "--device",
+        "auto"
+      ]
+    },
+    {
+      "name": "Python: Sweep FNO Size (Fast Debug - tiny, 2 epochs)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/train_fno_sweep.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false,
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "args": [
+        "--scenarios-dir",
+        "${userHome}/Projects/groundwater/data/simple_henry_data/grid_scenarios_20x40/scenarios",
+        "--sweep-mode",
+        "preset",
+        "--model-size-presets",
+        "tiny",
+        "--epochs",
+        "2",
+        "--batch-size",
+        "512",
+        "--learning-rate",
+        "8e-4",
+        "--train-ratio",
+        "0.7",
+        "--num-workers",
+        "4",
+        "--pin-memory",
+        "--scheduler-step-size",
+        "50",
+        "--scheduler-decay",
+        "0.80",
+        "--seed",
+        "321",
+        "--validation-run-name",
+        "run_000003",
+        "--results-dir",
+        "${userHome}/Projects/groundwater/results/fno_simple_henry_sweep/grid_scenarios_20x40",
+        "--device",
+        "auto"
       ]
     }
   ]
