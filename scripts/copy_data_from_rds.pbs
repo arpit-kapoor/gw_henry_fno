@@ -18,7 +18,7 @@ remote_host=research-data-ext.sydney.edu.au
 
 # NOTE: Add a trailing slash (/) to remote_path if you don't want to create the
 # parent directory at the destination. 
-filename=grid_scenarios_20x40.tar.gz
+filename=grid_scenarios_lag10_20x40.tar.gz
 remote_path=/rds/${RDSPROJECT}/data/simple_henry/${filename}
 
 # Gadi:

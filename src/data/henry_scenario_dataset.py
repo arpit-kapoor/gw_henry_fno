@@ -237,14 +237,18 @@ class HenryScenarioDataset(Dataset):
                     f"found {len(run_refs)}"
                 )
 
-            shuffled = list(run_refs)
-            Random(seed).shuffle(shuffled)
+            run_names = set([run_dir.name for _, run_dir in run_refs])
+            shuffled_run_names = list(run_names)
+            Random(seed).shuffle(shuffled_run_names)
 
-            n_train = int(len(shuffled) * train_ratio)
-            n_train = max(1, min(n_train, len(shuffled) - 1))
+            n_train = int(len(shuffled_run_names) * train_ratio)
+            n_train = max(1, min(n_train, len(shuffled_run_names) - 1))
 
-            train_runs = shuffled[:n_train]
-            val_runs = shuffled[n_train:]
+            train_run_names = set(shuffled_run_names[:n_train])
+            val_run_names = set(shuffled_run_names[n_train:])
+
+            train_runs = [(scenario_idx, run_dir) for scenario_idx, run_dir in run_refs if run_dir.name in train_run_names]
+            val_runs = [(scenario_idx, run_dir) for scenario_idx, run_dir in run_refs if run_dir.name in val_run_names]
 
             return train_runs if split == "train" else val_runs
 
