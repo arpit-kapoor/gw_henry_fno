@@ -5,7 +5,7 @@ remote_user=${RDSUSER}
 remote_host=research-data-ext.sydney.edu.au
 
 # Filepath
-filename=grid_scenarios_20x40.tar.gz
+filename=grid_scenarios_lag10_20x40.tar.gz
 remote_path=/rds/${RDSPROJECT}/results/simple_henry/${filename}
 
 # Gadi:
