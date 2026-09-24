@@ -59,27 +59,28 @@ def save_predictions_npz(
     *,
     train_targets: Optional[np.ndarray],
     train_preds: Optional[np.ndarray],
-    train_preds_rollout: Optional[np.ndarray],
     val_targets: Optional[np.ndarray],
     val_preds: Optional[np.ndarray],
-    val_preds_rollout: Optional[np.ndarray],
     output_dir: Path,
     scenario_name: str,
     model_size_label: str,
 ) -> Path:
-    """Save all prediction arrays for one (scenario, model) pair to a .npz file.
+    """Save prediction arrays for one (scenario, model) pair to a .npz file.
 
-    All arrays must have shape ``(N, T, H, W, 2)`` where:
-      - N = number of runs (train or val)
-      - T = number of timesteps per run
-      - H, W = spatial grid dimensions
-      - 2 = output channels (concentration, hydraulic head)
+    The 3-D FNO predicts the full output trajectory in a single forward pass,
+    so there is no separate rollout array.  All arrays have shape
+    ``(N, T_out, Z, X, C_out)`` where:
+
+      - ``N``     — number of runs (train or val split)
+      - ``T_out`` — number of output time steps
+      - ``Z, X``  — vertical and horizontal grid dimensions
+      - ``C_out`` — output channels (concentration index 0, hydraulic head index 1)
 
     Parameters
     ----------
-    train_targets, train_preds, train_preds_rollout:
+    train_targets, train_preds:
         Arrays for the training split.
-    val_targets, val_preds, val_preds_rollout:
+    val_targets, val_preds:
         Arrays for the validation split.
     output_dir:
         Top-level results directory (``--results-dir``).
@@ -100,10 +101,8 @@ def save_predictions_npz(
         out_path,
         train_targets=train_targets,
         train_preds=train_preds,
-        train_preds_rollout=train_preds_rollout,
         val_targets=val_targets,
         val_preds=val_preds,
-        val_preds_rollout=val_preds_rollout,
     )
     return out_path
 

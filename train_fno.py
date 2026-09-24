@@ -1,4 +1,4 @@
-"""Train a single FNO model across Henry scenarios."""
+"""Train a single 3-D FNO model across Henry scenarios."""
 
 from __future__ import annotations
 
@@ -55,10 +55,19 @@ def evaluate_mse(
     device: torch.device,
     normalizer: Optional[Normalizer] = None,
 ) -> float:
-    """Evaluate model MSE on a dataloader.
-    
-    If normalizer is provided, denormalizes predictions and targets
-    before computing MSE (for reporting in original data scale).
+    """Evaluate model MSE on a dataloader in denormalised space.
+
+    Parameters
+    ----------
+    model : nn.Module
+        Trained 3-D FNO.
+    dataloader :
+        DataLoader yielding ``(x, y)`` batches of shape ``(B, C, T, Z, X)``.
+    device : torch.device
+        Inference device.
+    normalizer : Normalizer, optional
+        If provided, predictions and targets are denormalised before MSE
+        computation so metrics are reported in the original data scale.
     """
     model.eval()
     total_loss = 0.0
@@ -71,16 +80,13 @@ def evaluate_mse(
             yb = yb.to(device, non_blocking=(device.type == "cuda"))
             pred = model(xb)
 
-            # Denormalize if normalizer is provided
             if normalizer is not None:
                 pred = normalizer.denormalize_output(pred)
                 yb = normalizer.denormalize_output(yb)
 
             loss = criterion(pred, yb)
-
-            batch_size = xb.size(0)
-            total_loss += loss.item() * batch_size
-            total_samples += batch_size
+            total_loss += loss.item() * xb.size(0)
+            total_samples += xb.size(0)
 
     if total_samples == 0:
         raise ValueError("Dataloader produced zero samples during evaluation")
@@ -89,13 +95,12 @@ def evaluate_mse(
 
 
 def main() -> None:
-    """Run end-to-end training and print final metrics."""
+    """Run end-to-end 3-D FNO training and print final metrics."""
     args = parse_args()
     set_seed(args.seed)
 
     device = resolve_device(args.device)
 
-    # Build train/validation loaders and optional normalizer from CLI settings.
     dataloaders = create_henry_dataloaders(
         scenarios_dir=args.scenario_dir,
         batch_size=args.batch_size,
@@ -104,10 +109,8 @@ def main() -> None:
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         normalize=args.normalize,
-        validation_run_name=args.validation_run_name,
     )
 
-    # Unpack optional normalizer returned by loader factory.
     if args.normalize:
         train_loader, val_loader, normalizer = dataloaders
     else:
@@ -118,8 +121,9 @@ def main() -> None:
     in_channels = int(sample_x.shape[1])
     out_channels = int(sample_y.shape[1])
 
+    # 3-D FNO: n_modes is a 3-tuple → spectral convolutions over (T, Z, X).
     model = FNO(
-        n_modes=(args.n_modes_x, args.n_modes_y),
+        n_modes=(args.n_modes_t, args.n_modes_z, args.n_modes_x),
         hidden_channels=args.hidden_channels,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -131,9 +135,8 @@ def main() -> None:
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
-    train_criterion = LpLoss(d=2, p=2, reduce_dims=[0, 1], reductions="mean")
+    train_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions="mean")
 
-    # Create learning-rate scheduler when enabled.
     scheduler = None
     if not args.disable_scheduler:
         scheduler = torch.optim.lr_scheduler.StepLR(
@@ -157,20 +160,19 @@ def main() -> None:
             loss.backward()
             optimizer.step()
 
-            batch_size = xb.size(0)
-            running_loss += loss.item() * batch_size
-            total_samples += batch_size
+            running_loss += loss.item() * xb.size(0)
+            total_samples += xb.size(0)
 
         epoch_train_l2 = running_loss / total_samples
-        
-        # Evaluate on the validation set every epoch.
         epoch_val_mse = evaluate_mse(model, val_loader, device, normalizer)
-        
-        # Log current learning rate for traceability.
         current_lr = optimizer.param_groups[0]["lr"]
-        print(f"Epoch {epoch:03d}/{args.epochs} - train_l2: {epoch_train_l2:.6f}, val_mse: {epoch_val_mse:.6f}, lr: {current_lr:.6e}")
-        
-        # Apply scheduler step at the end of each epoch.
+        print(
+            f"Epoch {epoch:03d}/{args.epochs} - "
+            f"train_l2: {epoch_train_l2:.6f}, "
+            f"val_mse: {epoch_val_mse:.6f}, "
+            f"lr: {current_lr:.6e}"
+        )
+
         if scheduler is not None:
             scheduler.step()
 
@@ -179,9 +181,9 @@ def main() -> None:
 
     print("\nFinal metrics")
     print(f"scenarios_dir: {args.scenario_dir}")
-    print(f"validation_run_name: {args.validation_run_name}")
     print(f"device: {device}")
     print(f"normalize: {args.normalize}")
+    print(f"n_modes: (t={args.n_modes_t}, z={args.n_modes_z}, x={args.n_modes_x})")
     print(f"scheduler_enabled: {not args.disable_scheduler}")
     if not args.disable_scheduler:
         print(f"scheduler_step_size: {args.scheduler_step_size}")

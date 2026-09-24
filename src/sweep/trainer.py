@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 
@@ -15,6 +15,8 @@ from .metrics import evaluate_l2
 
 @dataclass(frozen=True)
 class TrainOneModelResult:
+    """Return type of :func:`train_one_model`."""
+
     model: torch.nn.Module
     train_loader: object
     val_loader: object
@@ -25,6 +27,7 @@ class TrainOneModelResult:
 
 
 def count_trainable_parameters(model: torch.nn.Module) -> int:
+    """Count the number of trainable parameters in a model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
@@ -38,10 +41,10 @@ def train_one_model(
     eval_every: int,
     train_ratio: float,
     seed: int,
-    validation_run_name: Optional[str],
     device: torch.device,
+    n_modes_t: int,
+    n_modes_z: int,
     n_modes_x: int,
-    n_modes_y: int,
     hidden_channels: int,
     n_layers: int,
     num_workers: int,
@@ -51,18 +54,57 @@ def train_one_model(
     scheduler_step_size: int,
     scheduler_decay: float,
 ) -> TrainOneModelResult:
-    """Train one model configuration and return final sweep metrics."""
+    """Train one 3-D FNO configuration and return results for the sweep.
+
+    The FNO is instantiated with ``n_modes=(n_modes_t, n_modes_z, n_modes_x)``
+    so that spectral convolutions operate over the full (time, vertical,
+    horizontal) volume simultaneously.  Each training sample is a complete run
+    of shape ``(C_in, T_in, Z, X)``; the model predicts
+    ``(C_out, T_out, Z, X)`` in a single forward pass.
+
+    Parameters
+    ----------
+    scenarios_dir : Path
+        Parent directory of ``scenario_NNN/scenario.npz`` subdirs.
+    epochs : int
+        Number of training epochs.
+    batch_size : int
+        Batch size for both loaders.
+    learning_rate : float
+        AdamW initial learning rate.
+    weight_decay : float
+        AdamW weight decay.
+    eval_every : int
+        Validate every *N* epochs (must be > 0).
+    train_ratio : float
+        Fraction of runs used for training (shared across scenarios).
+    seed : int
+        RNG seed for data split and training initialisation.
+    device : torch.device
+        Training device.
+    n_modes_t, n_modes_z, n_modes_x : int
+        Fourier modes along time, vertical, and horizontal axes respectively.
+    hidden_channels : int
+        Hidden channel width in the FNO.
+    n_layers : int
+        Number of Fourier integral operator layers.
+    num_workers : int
+        DataLoader worker processes.
+    pin_memory : bool
+        Enable pinned memory (effective only with CUDA).
+    normalize : bool
+        Apply per-channel mean/std normalisation.
+    disable_scheduler : bool
+        Skip learning-rate scheduling when True.
+    scheduler_step_size : int
+        StepLR step size in epochs.
+    scheduler_decay : float
+        StepLR gamma (multiplicative decay factor).
+    """
     if eval_every <= 0:
         raise ValueError(f"eval_every must be > 0, got {eval_every}")
 
-    # ------------------------------------------------------------------
-    # Fix 1: pin_memory and multi-process data loading are only reliable
-    # and effective with CUDA.  On MPS (Apple Silicon), pin_memory causes
-    # silent data corruption because pinned CPU pages conflict with the
-    # unified-memory model; fork-based worker processes can also return
-    # stale or garbled batches on macOS.  Force both to their safe
-    # defaults when the target device is not CUDA.
-    # ------------------------------------------------------------------
+    # pin_memory and multi-process loading are only reliable with CUDA.
     effective_pin_memory = pin_memory and device.type == "cuda"
     effective_num_workers = num_workers if device.type == "cuda" else 0
 
@@ -74,7 +116,6 @@ def train_one_model(
         num_workers=effective_num_workers,
         pin_memory=effective_pin_memory,
         normalize=normalize,
-        validation_run_name=validation_run_name,
     )
 
     if normalize:
@@ -83,12 +124,15 @@ def train_one_model(
         train_loader, val_loader = dataloaders
         normalizer = None
 
+    # Infer channel counts from a single batch.
     sample_x, sample_y = next(iter(train_loader))
     in_channels = int(sample_x.shape[1])
     out_channels = int(sample_y.shape[1])
 
+    # Build 3-D FNO: n_modes is a 3-tuple → 3-D spectral convolutions,
+    # Conv3d skip connections, and 3-D lifting/projection MLPs.
     model = FNO(
-        n_modes=(n_modes_x, n_modes_y),
+        n_modes=(n_modes_t, n_modes_z, n_modes_x),
         hidden_channels=hidden_channels,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -102,13 +146,13 @@ def train_one_model(
         lr=learning_rate,
         weight_decay=weight_decay,
     )
-    # Criterion returns the mean relative-L2 over the batch and channel
-    # dimensions.  A separate sum-over-batch criterion is used for lossless
-    # epoch-level accumulation so we never rely on the implicit
-    # "mean × batch_size" cancellation (which silently breaks when the last
-    # batch is smaller than batch_size).
-    train_criterion = LpLoss(d=2, p=2, reduce_dims=[0, 1], reductions="mean")
-    accum_criterion = LpLoss(d=2, p=2, reduce_dims=[0, 1], reductions=["sum", "mean"])
+
+    # LpLoss with d=3 for the 3-D (T, Z, X) domain.
+    # train_criterion returns the mean relative-L2 over the batch.
+    # accum_criterion sums over batch for correct per-sample epoch aggregation
+    # even when the final batch is smaller than batch_size.
+    train_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions="mean")
+    accum_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions=["sum", "mean"])
 
     scheduler: Optional[torch.optim.lr_scheduler.StepLR] = None
     if not disable_scheduler:
@@ -136,20 +180,11 @@ def train_one_model(
             loss.backward()
             optimizer.step()
 
-            # ------------------------------------------------------------------
-            # Fix 2: accumulate the batch's *sum* of per-sample relative-L2
-            # values (mean over channels, sum over batch) so that dividing by
-            # total_samples later gives the correct per-sample epoch mean
-            # regardless of whether the final batch is a partial batch.
-            # accum_criterion uses reductions=["sum", "mean"]: sum over batch
-            # (dim 0), mean over channels (dim 1) → scalar batch-sum.
-            # ------------------------------------------------------------------
             with torch.no_grad():
                 running_loss += accum_criterion(pred, yb).item()
             total_samples += xb.size(0)
 
         epoch_train_l2 = running_loss / total_samples
-        # Always evaluate global validation loss each epoch for convergence plotting.
         epoch_val_l2 = evaluate_l2(model, val_loader, device)
         train_loss_history.append(epoch_train_l2)
         val_loss_history.append(epoch_val_l2)

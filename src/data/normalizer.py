@@ -1,9 +1,14 @@
-"""Normalization utilities for Henry scenario data."""
+"""Normalization utilities for Henry scenario data.
+
+Supports tensors of any rank ≥ 3 where dimension 1 is the channel axis,
+covering both the old 4-D layout ``(B, C, H, W)`` and the new 5-D layout
+``(B, C, T, Z, X)`` for 3-D FNO training.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Literal, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import torch
@@ -11,23 +16,23 @@ from torch.utils.data import Dataset
 
 
 class Normalizer:
-    """Computes and applies mean/std normalization.
+    """Per-channel mean/std normalizer.
 
-    Computes statistics on a source dataset (typically train) and applies
-    the same normalization to multiple datasets (train and val).
+    Computes statistics on a source dataset (typically the train split) and
+    applies the same normalisation to any split.
 
     Parameters
     ----------
     input_mean : torch.Tensor
-        Mean of input tensors, shape (C_in,).
+        Per-channel mean of inputs, shape ``(C_in,)``.
     input_std : torch.Tensor
-        Std of input tensors, shape (C_in,).
+        Per-channel std of inputs, shape ``(C_in,)``.
     output_mean : torch.Tensor
-        Mean of output tensors, shape (C_out,).
+        Per-channel mean of outputs, shape ``(C_out,)``.
     output_std : torch.Tensor
-        Std of output tensors, shape (C_out,).
+        Per-channel std of outputs, shape ``(C_out,)``.
     epsilon : float, optional
-        Small value to avoid division by zero, by default 1e-8.
+        Small value added to std to avoid division by zero, by default 1e-8.
     """
 
     def __init__(
@@ -38,12 +43,15 @@ class Normalizer:
         output_std: torch.Tensor,
         epsilon: float = 1e-8,
     ) -> None:
-        """Store normalization statistics used for input/output scaling."""
         self.input_mean = input_mean
         self.input_std = input_std
         self.output_mean = output_mean
         self.output_std = output_std
         self.epsilon = epsilon
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
 
     @classmethod
     def from_dataset(
@@ -51,61 +59,53 @@ class Normalizer:
         dataset: Dataset,
         compute_output_stats: bool = True,
         epsilon: float = 1e-8,
-    ) -> Normalizer:
-        """Compute normalizer statistics from a dataset.
+    ) -> "Normalizer":
+        """Compute normaliser statistics from a dataset.
 
-        Iterates through all samples in the dataset and computes per-channel
-        mean and standard deviation.
+        Iterates all samples and computes per-channel mean and standard
+        deviation, reducing over all non-channel dimensions.  Works for
+        tensors of any shape ``(C, *spatial)``, e.g. ``(C, H, W)`` or
+        ``(C, T, Z, X)``.
 
         Parameters
         ----------
         dataset : Dataset
-            Dataset to compute statistics from (typically train split).
-            Expected to return (input_tensor, output_tensor) tuples.
+            Dataset returning ``(x, y)`` tuples.
         compute_output_stats : bool, optional
-            If True, compute stats for both inputs and outputs.
-            If False, only compute input stats, by default True.
+            If True, compute stats for outputs as well, by default True.
         epsilon : float, optional
-            Small value to avoid division by zero, by default 1e-8.
-
-        Returns
-        -------
-        Normalizer
-            Normalizer instance with computed statistics.
+            Divisor epsilon, by default 1e-8.
         """
         input_samples = []
         output_samples = []
 
         for x, y in dataset:
-            # Ensure tensors and move to CPU for accumulation
             if isinstance(x, np.ndarray):
                 x = torch.from_numpy(x)
             if isinstance(y, np.ndarray):
                 y = torch.from_numpy(y)
-
-            x = x.cpu()
-            y = y.cpu()
-
-            input_samples.append(x)
+            input_samples.append(x.cpu())
             if compute_output_stats:
-                output_samples.append(y)
+                output_samples.append(y.cpu())
 
-        # Stack all samples and compute statistics
-        # Shape: (N, C, H, W) after stacking
-        input_stacked = torch.stack(input_samples, dim=0)  # (N, C, H, W)
-        output_stacked = torch.stack(output_samples, dim=0) if compute_output_stats else None
+        # Stack → (N, C, *spatial)
+        input_stacked = torch.stack(input_samples, dim=0)
 
-        # Compute per-channel mean and std across (N, H, W)
-        # Result: (C,) tensors
-        input_mean = input_stacked.mean(dim=(0, 2, 3))  # Average over N, H, W
-        input_std = input_stacked.std(dim=(0, 2, 3))  # Std over N, H, W
+        # Average over all axes except the channel axis (dim=1).
+        reduce_dims = tuple(i for i in range(input_stacked.ndim) if i != 1)
+        input_mean = input_stacked.mean(dim=reduce_dims)
+        input_std = input_stacked.std(dim=reduce_dims)
 
         if compute_output_stats:
-            output_mean = output_stacked.mean(dim=(0, 2, 3))
-            output_std = output_stacked.std(dim=(0, 2, 3))
+            output_stacked = torch.stack(output_samples, dim=0)
+            reduce_dims_out = tuple(
+                i for i in range(output_stacked.ndim) if i != 1
+            )
+            output_mean = output_stacked.mean(dim=reduce_dims_out)
+            output_std = output_stacked.std(dim=reduce_dims_out)
         else:
-            output_mean = torch.zeros_like(input_mean)
-            output_std = torch.ones_like(input_mean)
+            output_mean = torch.zeros(1)
+            output_std = torch.ones(1)
 
         return cls(
             input_mean=input_mean,
@@ -115,124 +115,99 @@ class Normalizer:
             epsilon=epsilon,
         )
 
+    # ------------------------------------------------------------------
+    # Internal broadcasting helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _broadcast_stats(
+        stats: torch.Tensor, ndim: int
+    ) -> torch.Tensor:
+        """Reshape a ``(C,)`` stats tensor to broadcast over any ``ndim`` tensor.
+
+        For a tensor of shape ``(C, *spatial)`` (ndim-1 trailing dims after C)
+        this returns shape ``(C, 1, 1, ...)``.  For a batched tensor ``(B, C,
+        *spatial)`` this returns ``(1, C, 1, 1, ...)``.
+
+        Parameters
+        ----------
+        stats : torch.Tensor, shape ``(C,)``
+        ndim : int
+            Number of dimensions in the target tensor (3, 4, or 5).
+        """
+        # ndim=3 → (C,1,1); ndim=4 → (1,C,1,1); ndim=5 → (1,C,1,1,1)
+        if ndim == 3:
+            # Single sample: (C, *spatial)
+            n_trailing = ndim - 1
+            return stats.view(-1, *([1] * n_trailing))
+        else:
+            # Batched: (B, C, *spatial)
+            n_trailing = ndim - 2
+            return stats.view(1, -1, *([1] * n_trailing))
+
+    # ------------------------------------------------------------------
+    # Normalise / denormalise
+    # ------------------------------------------------------------------
+
     def normalize_input(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize input tensor using computed statistics.
+        """Normalise input tensor channel-wise.
 
         Parameters
         ----------
         x : torch.Tensor
-            Input tensor of shape (C, H, W) or (B, C, H, W).
+            Shape ``(C, *spatial)`` or ``(B, C, *spatial)``.
 
         Returns
         -------
         torch.Tensor
-            Normalized tensor with same shape.
+            Normalised tensor with the same shape.
         """
         device = x.device
-        mean = self.input_mean.to(device)
-        std = (self.input_std + self.epsilon).to(device)
-
-        # Reshape for broadcasting: (C,) -> (C, 1, 1) for 3D or (1, C, 1, 1) for 4D
-        if x.ndim == 4:
-            # Batch: (B, C, H, W) - expand stats to (1, C, 1, 1)
-            mean = mean.view(1, -1, 1, 1)
-            std = std.view(1, -1, 1, 1)
-        elif x.ndim == 3:
-            # Single sample: (C, H, W) - expand stats to (C, 1, 1)
-            mean = mean.view(-1, 1, 1)
-            std = std.view(-1, 1, 1)
-
+        mean = self._broadcast_stats(self.input_mean.to(device), x.ndim)
+        std = self._broadcast_stats(
+            (self.input_std + self.epsilon).to(device), x.ndim
+        )
         return (x - mean) / std
 
     def normalize_output(self, y: torch.Tensor) -> torch.Tensor:
-        """Normalize output tensor using computed statistics.
+        """Normalise output tensor channel-wise.
 
         Parameters
         ----------
         y : torch.Tensor
-            Output tensor of shape (C, H, W) or (B, C, H, W).
-
-        Returns
-        -------
-        torch.Tensor
-            Normalized tensor with same shape.
+            Shape ``(C, *spatial)`` or ``(B, C, *spatial)``.
         """
         device = y.device
-        mean = self.output_mean.to(device)
-        std = (self.output_std + self.epsilon).to(device)
-
-        # Reshape for broadcasting: (C,) -> (C, 1, 1) for 3D or (1, C, 1, 1) for 4D
-        if y.ndim == 4:
-            mean = mean.view(1, -1, 1, 1)
-            std = std.view(1, -1, 1, 1)
-        elif y.ndim == 3:
-            mean = mean.view(-1, 1, 1)
-            std = std.view(-1, 1, 1)
-
+        mean = self._broadcast_stats(self.output_mean.to(device), y.ndim)
+        std = self._broadcast_stats(
+            (self.output_std + self.epsilon).to(device), y.ndim
+        )
         return (y - mean) / std
 
     def denormalize_input(self, x: torch.Tensor) -> torch.Tensor:
-        """Denormalize input tensor back to original scale.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Normalized input tensor of shape (C, H, W) or (B, C, H, W).
-
-        Returns
-        -------
-        torch.Tensor
-            Denormalized tensor with same shape.
-        """
+        """Reverse normalisation for input tensors."""
         device = x.device
-        mean = self.input_mean.to(device)
-        std = (self.input_std + self.epsilon).to(device)
-
-        # Reshape for broadcasting: (C,) -> (C, 1, 1) for 3D or (1, C, 1, 1) for 4D
-        if x.ndim == 4:
-            mean = mean.view(1, -1, 1, 1)
-            std = std.view(1, -1, 1, 1)
-        elif x.ndim == 3:
-            mean = mean.view(-1, 1, 1)
-            std = std.view(-1, 1, 1)
-
+        mean = self._broadcast_stats(self.input_mean.to(device), x.ndim)
+        std = self._broadcast_stats(
+            (self.input_std + self.epsilon).to(device), x.ndim
+        )
         return x * std + mean
 
     def denormalize_output(self, y: torch.Tensor) -> torch.Tensor:
-        """Denormalize output tensor back to original scale.
-
-        Parameters
-        ----------
-        y : torch.Tensor
-            Normalized output tensor of shape (C, H, W) or (B, C, H, W).
-
-        Returns
-        -------
-        torch.Tensor
-            Denormalized tensor with same shape.
-        """
+        """Reverse normalisation for output tensors."""
         device = y.device
-        mean = self.output_mean.to(device)
-        std = (self.output_std + self.epsilon).to(device)
-
-        # Reshape for broadcasting: (C,) -> (C, 1, 1) for 3D or (1, C, 1, 1) for 4D
-        if y.ndim == 4:
-            mean = mean.view(1, -1, 1, 1)
-            std = std.view(1, -1, 1, 1)
-        elif y.ndim == 3:
-            mean = mean.view(-1, 1, 1)
-            std = std.view(-1, 1, 1)
-
+        mean = self._broadcast_stats(self.output_mean.to(device), y.ndim)
+        std = self._broadcast_stats(
+            (self.output_std + self.epsilon).to(device), y.ndim
+        )
         return y * std + mean
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert normalizer to dictionary for serialization.
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
 
-        Returns
-        -------
-        dict
-            Dictionary with 'input_mean', 'input_std', 'output_mean', 'output_std' keys.
-        """
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON/NPZ serialisation."""
         return {
             "input_mean": self.input_mean.cpu().numpy(),
             "input_std": self.input_std.cpu().numpy(),
@@ -241,21 +216,8 @@ class Normalizer:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], epsilon: float = 1e-8) -> Normalizer:
-        """Create normalizer from dictionary.
-
-        Parameters
-        ----------
-        data : dict
-            Dictionary with keys 'input_mean', 'input_std', 'output_mean', 'output_std'.
-        epsilon : float, optional
-            Small value to avoid division by zero, by default 1e-8.
-
-        Returns
-        -------
-        Normalizer
-            Normalizer instance.
-        """
+    def from_dict(cls, data: Dict[str, Any], epsilon: float = 1e-8) -> "Normalizer":
+        """Reconstruct from a dictionary (inverse of :meth:`to_dict`)."""
         return cls(
             input_mean=torch.from_numpy(data["input_mean"]).float(),
             input_std=torch.from_numpy(data["input_std"]).float(),
@@ -265,13 +227,7 @@ class Normalizer:
         )
 
     def save(self, path: str | Path) -> None:
-        """Save normalizer statistics to NPZ file.
-
-        Parameters
-        ----------
-        path : str or Path
-            Path to save the NPZ file.
-        """
+        """Save statistics to a NPZ file."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(
@@ -283,23 +239,9 @@ class Normalizer:
         )
 
     @classmethod
-    def load(cls, path: str | Path, epsilon: float = 1e-8) -> Normalizer:
-        """Load normalizer statistics from NPZ file.
-
-        Parameters
-        ----------
-        path : str or Path
-            Path to the NPZ file.
-        epsilon : float, optional
-            Small value to avoid division by zero, by default 1e-8.
-
-        Returns
-        -------
-        Normalizer
-            Normalizer instance.
-        """
-        path = Path(path)
-        with np.load(path, allow_pickle=False) as data:
+    def load(cls, path: str | Path, epsilon: float = 1e-8) -> "Normalizer":
+        """Load statistics from a NPZ file."""
+        with np.load(Path(path), allow_pickle=False) as data:
             return cls(
                 input_mean=torch.from_numpy(data["input_mean"]).float(),
                 input_std=torch.from_numpy(data["input_std"]).float(),
@@ -309,13 +251,12 @@ class Normalizer:
             )
 
     def __repr__(self) -> str:
-        """Return a compact multi-line representation of normalizer stats."""
         return (
             f"Normalizer(\n"
-            f"  input_mean: {self.input_mean},\n"
-            f"  input_std: {self.input_std},\n"
+            f"  input_mean:  {self.input_mean},\n"
+            f"  input_std:   {self.input_std},\n"
             f"  output_mean: {self.output_mean},\n"
-            f"  output_std: {self.output_std},\n"
-            f"  epsilon: {self.epsilon}\n"
+            f"  output_std:  {self.output_std},\n"
+            f"  epsilon:     {self.epsilon}\n"
             f")"
         )

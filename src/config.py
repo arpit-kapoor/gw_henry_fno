@@ -19,7 +19,7 @@ def add_scenario_arg(
         type=Path,
         required=required,
         default=default,
-        help="Path to scenarios directory containing scenario_*/run_*/windows.npz",
+        help="Path to scenarios directory containing scenario_NNN/scenario.npz subdirs",
     )
 
 
@@ -60,26 +60,27 @@ def add_scheduler_args(
     parser.add_argument(
         "--disable-scheduler",
         action="store_true",
-        help="Disable learning rate scheduler (default: enabled with exponential decay)",
+        help="Disable learning rate scheduler (default: enabled with step decay)",
     )
 
 
 def add_split_and_seed_args(
     parser: argparse.ArgumentParser,
     *,
-    default_train_ratio: float = 0.8,
+    default_train_ratio: float = 0.7,
     default_seed: int = 42,
 ) -> None:
-    """Register train/validation split and reproducibility arguments."""
-    parser.add_argument("--train-ratio", type=float, default=default_train_ratio, help="Run-level train split ratio")
+    """Register train/validation split and reproducibility arguments.
+
+    The train/val split is applied at the run-index level with the same
+    partition shared across all scenarios (run index k is always in the same
+    split regardless of which scenario it belongs to).
+    """
     parser.add_argument(
-        "--validation-run-name",
-        type=str,
-        default=None,
-        help=(
-            "If provided (e.g., run_000003), use this run as validation in each scenario; "
-            "otherwise use random run-level split"
-        ),
+        "--train-ratio",
+        type=float,
+        default=default_train_ratio,
+        help="Fraction of runs used for training (shared across all scenarios); default 0.7",
     )
     parser.add_argument("--seed", type=int, default=default_seed, help="Random seed for split and training")
 
@@ -87,16 +88,40 @@ def add_split_and_seed_args(
 def add_model_args(
     parser: argparse.ArgumentParser,
     *,
+    default_n_modes_t: int = 8,
+    default_n_modes_z: int = 8,
     default_n_modes_x: int = 16,
-    default_n_modes_y: int = 16,
     default_hidden_channels: int = 32,
     default_n_layers: int = 4,
 ) -> None:
-    """Register core FNO architecture arguments."""
-    parser.add_argument("--n-modes-x", type=int, default=default_n_modes_x, help="FNO modes in X dimension")
-    parser.add_argument("--n-modes-y", type=int, default=default_n_modes_y, help="FNO modes in Y dimension")
+    """Register 3-D FNO architecture arguments.
+
+    The three mode arguments map to the physical dimensions of the problem:
+
+    - ``--n-modes-t``: Fourier modes along the **time** axis (T_in=25, max ≤ 12)
+    - ``--n-modes-z``: Fourier modes along the **vertical** spatial axis (Z=20, max ≤ 10)
+    - ``--n-modes-x``: Fourier modes along the **horizontal** spatial axis (X=40, max ≤ 20)
+    """
+    parser.add_argument(
+        "--n-modes-t",
+        type=int,
+        default=default_n_modes_t,
+        help="FNO Fourier modes along the time axis (T_in=25, useful range ≤ 12)",
+    )
+    parser.add_argument(
+        "--n-modes-z",
+        type=int,
+        default=default_n_modes_z,
+        help="FNO Fourier modes along the vertical axis (Z=20, useful range ≤ 10)",
+    )
+    parser.add_argument(
+        "--n-modes-x",
+        type=int,
+        default=default_n_modes_x,
+        help="FNO Fourier modes along the horizontal axis (X=40, useful range ≤ 20)",
+    )
     parser.add_argument("--hidden-channels", type=int, default=default_hidden_channels, help="FNO hidden channels")
-    parser.add_argument("--n-layers", type=int, default=default_n_layers, help="Number of FNO layers")
+    parser.add_argument("--n-layers", type=int, default=default_n_layers, help="Number of FNO Fourier layers")
 
 
 def add_runtime_args(
@@ -110,12 +135,12 @@ def add_runtime_args(
     parser.add_argument(
         "--pin-memory",
         action="store_true",
-        help="Enable pinned memory in DataLoaders",
+        help="Enable pinned memory in DataLoaders (effective only with CUDA)",
     )
     parser.add_argument(
         "--normalize",
         action="store_true",
-        help="Normalize data using mean/std from training set",
+        help="Normalize data using per-channel mean/std from training set",
     )
     parser.add_argument(
         "--device",
@@ -145,9 +170,9 @@ def validate_common_args(parser: argparse.ArgumentParser, args: argparse.Namespa
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Create the standard parser for training across all scenarios."""
+    """Create the standard parser for single-model training."""
     parser = argparse.ArgumentParser(
-        description="Train FNO across all Henry scenarios with run-level train/validation split",
+        description="Train a 3-D FNO across all Henry scenarios with run-level train/val split",
     )
 
     add_scenario_arg(parser, required=True)
@@ -164,7 +189,5 @@ def parse_args() -> argparse.Namespace:
     """Parse and validate command-line arguments."""
     parser = build_parser()
     args = parser.parse_args()
-
     validate_common_args(parser, args)
-
     return args

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""CLI entrypoint for running FNO architecture sweeps."""
+"""CLI entrypoint for running FNO architecture sweeps.
+
+Each model configuration is trained once across all Henry scenarios.  The 3-D
+FNO predicts the full output trajectory ``(C_out, T_out, Z, X)`` from
+``(C_in, T_in, Z, X)`` in a single forward pass.
+"""
 
 import gc
 from datetime import datetime
@@ -14,7 +19,7 @@ from src.sweep import (
     append_result_row,
     build_parser,
     collect_predictions_by_scenario,
-    compute_rollout_rel_l2_per_channel,
+    compute_rel_l2_per_channel,
     parse_hidden_channels,
     parse_model_size_presets,
     save_loss_history_json,
@@ -27,7 +32,6 @@ from train_fno import resolve_device, set_seed
 
 def main() -> None:
     """Parse sweep CLI arguments and orchestrate multi-model training."""
-    # Thin CLI entrypoint that delegates core work to src/sweep modules.
     parser = build_parser()
     args = parser.parse_args()
 
@@ -41,8 +45,9 @@ def main() -> None:
             ModelSizeConfig(
                 label=f"hidden_{hidden_channels}",
                 hidden_channels=hidden_channels,
+                n_modes_t=args.n_modes_t,
+                n_modes_z=args.n_modes_z,
                 n_modes_x=args.n_modes_x,
-                n_modes_y=args.n_modes_y,
                 n_layers=args.n_layers,
             )
             for hidden_channels in hidden_channels_values
@@ -51,7 +56,6 @@ def main() -> None:
     set_seed(args.seed)
     device = resolve_device(args.device)
     if device.type == "cuda":
-        # Input shapes are fixed, so autotuning usually improves conv throughput.
         torch.backends.cudnn.benchmark = True
 
     scenarios_dir = args.scenario_dir
@@ -59,33 +63,40 @@ def main() -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
     csv_path = results_dir / "sweep_results.csv"
 
-    print("Starting multi-model FNO sweep")
+    print("Starting multi-model 3-D FNO sweep")
     print(f"scenarios_dir: {scenarios_dir}")
     print(f"sweep_mode: {args.sweep_mode}")
     if args.sweep_mode == "preset":
         print(f"model_size_presets: {[cfg.label for cfg in sweep_configs]}")
     else:
         print(f"hidden_channels_list: {[cfg.hidden_channels for cfg in sweep_configs]}")
-        print(f"fixed architecture: n_modes=({args.n_modes_x}, {args.n_modes_y}), n_layers={args.n_layers}")
+        print(
+            f"fixed architecture: "
+            f"n_modes=(t={args.n_modes_t}, z={args.n_modes_z}, x={args.n_modes_x}), "
+            f"n_layers={args.n_layers}"
+        )
+    print(f"train_ratio: {args.train_ratio}, seed: {args.seed}")
     print(f"results csv: {csv_path}")
 
     for config in sweep_configs:
-        # Re-seed per configuration so initialization and shuffled batch order
-        # do not depend on loop position.
+        # Re-seed per configuration so initialisation and shuffled batch order
+        # are independent of loop position.
         model_seed = (
             args.seed
             + config.hidden_channels
+            + config.n_modes_t
+            + config.n_modes_z
             + config.n_modes_x
-            + config.n_modes_y
             + 10 * config.n_layers
         )
         set_seed(model_seed)
 
         print("=" * 60)
         print(
-            "Training model config "
+            f"Training model config "
             f"label={config.label}, hidden_channels={config.hidden_channels}, "
-            f"n_modes=({config.n_modes_x}, {config.n_modes_y}), n_layers={config.n_layers}"
+            f"n_modes=(t={config.n_modes_t}, z={config.n_modes_z}, x={config.n_modes_x}), "
+            f"n_layers={config.n_layers}"
         )
         print(f"model_seed: {model_seed}")
         print("=" * 60)
@@ -99,10 +110,10 @@ def main() -> None:
             eval_every=args.eval_every,
             train_ratio=args.train_ratio,
             seed=args.seed,
-            validation_run_name=args.validation_run_name,
             device=device,
+            n_modes_t=config.n_modes_t,
+            n_modes_z=config.n_modes_z,
             n_modes_x=config.n_modes_x,
-            n_modes_y=config.n_modes_y,
             hidden_channels=config.hidden_channels,
             n_layers=config.n_layers,
             num_workers=args.num_workers,
@@ -121,7 +132,7 @@ def main() -> None:
         )
         print(f"Saved model weights: {weights_path}")
 
-        # 2. Save per-epoch loss histories (train/val one-step-ahead, normalised space).
+        # 2. Save per-epoch loss histories.
         loss_json_path = save_loss_history_json(
             train_loss_history=result.train_loss_history,
             val_loss_history=result.val_loss_history,
@@ -150,7 +161,7 @@ def main() -> None:
             normalizer=result.normalizer,
         )
 
-        # 4. For each scenario: save NPZ and append CSV row.
+        # 4. Per-scenario: save NPZ and append CSV row.
         all_scenario_names = sorted(
             set(train_preds_by_scenario.keys()) | set(val_preds_by_scenario.keys())
         )
@@ -159,19 +170,18 @@ def main() -> None:
             train_data = train_preds_by_scenario.get(scenario_name)
             val_data = val_preds_by_scenario.get(scenario_name)
 
-            # Compute rollout relative L2 per channel (denormalized).
             if train_data is not None:
-                train_rel_l2_conc, train_rel_l2_head = compute_rollout_rel_l2_per_channel(
+                train_rel_l2_conc, train_rel_l2_head = compute_rel_l2_per_channel(
                     targets=train_data["targets"],
-                    preds_rollout=train_data["preds_rollout"],
+                    preds=train_data["preds"],
                 )
             else:
                 train_rel_l2_conc, train_rel_l2_head = float("nan"), float("nan")
 
             if val_data is not None:
-                val_rel_l2_conc, val_rel_l2_head = compute_rollout_rel_l2_per_channel(
+                val_rel_l2_conc, val_rel_l2_head = compute_rel_l2_per_channel(
                     targets=val_data["targets"],
-                    preds_rollout=val_data["preds_rollout"],
+                    preds=val_data["preds"],
                 )
             else:
                 val_rel_l2_conc, val_rel_l2_head = float("nan"), float("nan")
@@ -182,23 +192,17 @@ def main() -> None:
                 f"val_conc={val_rel_l2_conc:.6f}, val_head={val_rel_l2_head:.6f}"
             )
 
-            # Save predictions NPZ: all six arrays with shape (N, T, H, W, 2).
-            # N may differ between train and val splits.
-            _empty = lambda: None  # sentinel; replaced below if data absent
             npz_path = save_predictions_npz(
                 train_targets=train_data["targets"] if train_data else None,
                 train_preds=train_data["preds"] if train_data else None,
-                train_preds_rollout=train_data["preds_rollout"] if train_data else None,
                 val_targets=val_data["targets"] if val_data else None,
                 val_preds=val_data["preds"] if val_data else None,
-                val_preds_rollout=val_data["preds_rollout"] if val_data else None,
                 output_dir=results_dir,
                 scenario_name=scenario_name,
                 model_size_label=config.label,
             )
             print(f"  Saved predictions: {npz_path}")
 
-            # Append one CSV row per (scenario, model) pair.
             row = {
                 "run_timestamp": datetime.now().isoformat(timespec="seconds"),
                 "scenario_name": scenario_name,
@@ -216,7 +220,6 @@ def main() -> None:
             f"params={result.total_params}"
         )
 
-        # Clean up model, loaders, and memory before the next configuration.
         del result, train_dataset, val_dataset
         del train_preds_by_scenario, val_preds_by_scenario
         if device.type == "mps":
