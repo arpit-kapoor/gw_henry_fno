@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
+import datetime as dt
 
 from src.config import parse_args
 
@@ -167,6 +168,7 @@ def main() -> None:
         epoch_val_mse = evaluate_mse(model, val_loader, device, normalizer)
         current_lr = optimizer.param_groups[0]["lr"]
         print(
+            f"({dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) :: "
             f"Epoch {epoch:03d}/{args.epochs} - "
             f"train_l2: {epoch_train_l2:.6f}, "
             f"val_mse: {epoch_val_mse:.6f}, "

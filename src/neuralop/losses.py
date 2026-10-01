@@ -665,3 +665,82 @@ def variance_aware_multicol_loss(
     loss = global_loss + lambda_conc_focus * conc_var_loss
 
     return loss, global_loss.detach(), conc_var_loss.detach()
+
+def compute_linf_l2_norm_torch(u, dx, dz, dt):
+    area = dz * dx
+
+    # Squared Norm
+    l2_sq_u_space = torch.sum(u**2, dim=(2, 3)) * area
+    l_inf_l2_sq_u = torch.max(l2_sq_u_space, dim=1)[0]
+
+    # Sum over time of spatial gradient L2 norm squared
+    grad_u_z, grad_u_x = torch.gradient(u, spacing=(dz, dx), dim=(2, 3))
+    grad_u_l2_sq_space = torch.sum(grad_u_z**2 + grad_u_x**2, dim=(2, 3)) * area
+    grad_u_l2_l2_sq = torch.sum(grad_u_l2_sq_space, dim=1) * dt
+
+    # Final u norm for each run
+    norm_u = torch.sqrt(l_inf_l2_sq_u + grad_u_l2_l2_sq)
+
+    return norm_u
+
+
+def compute_l2_norm_torch(u, dx, dz, dt):
+    area = dz * dx
+
+    # Spatial L2 norm squared at each time step
+    l2_sq_u_space = torch.sum(u**2, dim=(2, 3)) * area
+
+    # Spatial gradient L2 norm squared at each time step
+    grad_u_z, grad_u_x = torch.gradient(u, spacing=(dz, dx), dim=(2, 3))
+    grad_u_l2_sq_space = torch.sum(grad_u_z**2 + grad_u_x**2, dim=(2, 3)) * area
+
+    # ||p(t)||_{H^1}^2 = L2^2 + \nabla L2^2
+    h1_sq_u = l2_sq_u_space + grad_u_l2_sq_space
+
+    # Final p norm for each run: Max over time of the H^1 norm
+    norm_u = torch.max(torch.sqrt(h1_sq_u), dim=1)[0]
+
+    return norm_u
+
+
+class RelCombinedNormLoss(torch.nn.Module):
+    """
+    Relative combined norm metric for Henry problem.
+    Expects predictions and targets of shape (N, C, T, Z, X).
+    """
+    def __init__(self, dt=1.0, dz=0.05, dx=0.05):
+        super().__init__()
+        self.dt = dt
+        self.dz = dz
+        self.dx = dx
+
+    def forward(self, preds, targets):
+        # Residual
+        diff = preds - targets
+        
+        # Channel 0 = Concentration (C), Channel 1 = Pressure/Head (p)
+        diff_c = diff[:, 0, ...]  # shape: (N, T, Z, X)
+        diff_h = diff[:, 1, ...]  # shape: (N, T, Z, X)
+
+        # =====================================================================
+        # 1. Concentration Norm: ||C||_{\mathcal{C}_T}
+        # =====================================================================
+        norm_c_diff = compute_linf_l2_norm_torch(diff_c, self.dx, self.dz, self.dt)
+        norm_c_true = compute_linf_l2_norm_torch(targets[:, 0, ...], self.dx, self.dz, self.dt)
+        # Add epsilon to avoid division by zero
+        norm_c = norm_c_diff / (norm_c_true + 1e-12)
+
+        # =====================================================================
+        # 2. Pressure/Head Norm: ||p||_{L^\infty H^1}
+        # =====================================================================
+        norm_h_diff = compute_l2_norm_torch(diff_h, self.dx, self.dz, self.dt)
+        norm_h_true = compute_l2_norm_torch(targets[:, 1, ...], self.dx, self.dz, self.dt)
+        # Add epsilon to avoid division by zero
+        norm_h = norm_h_diff / (norm_h_true + 1e-12)
+
+        # =====================================================================
+        # 3. Combined Total Metric: ||(C, p)||_{\mathcal{Z}_T}
+        # =====================================================================
+        rel_combined_norm = norm_c + norm_h
+        
+        return torch.mean(rel_combined_norm)

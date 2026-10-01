@@ -1,14 +1,14 @@
 """Normalization utilities for Henry scenario data.
 
-Supports tensors of any rank ≥ 3 where dimension 1 is the channel axis,
-covering both the old 4-D layout ``(B, C, H, W)`` and the new 5-D layout
-``(B, C, T, Z, X)`` for 3-D FNO training.
+Supports tensors of any rank ≥ 3, covering:
+- 3-D unbatched (C, H, W) and 4-D batched (B, C, H, W) for 2-D FNO
+- 4-D unbatched (C, T, Z, X) and 5-D batched (B, C, T, Z, X) for 3-D FNO
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -121,41 +121,79 @@ class Normalizer:
 
     @staticmethod
     def _broadcast_stats(
-        stats: torch.Tensor, ndim: int
+        stats: torch.Tensor,
+        target_or_ndim: Union[torch.Tensor, torch.Size, Tuple[int, ...], int],
+        channel_dim: Optional[int] = None,
     ) -> torch.Tensor:
-        """Reshape a ``(C,)`` stats tensor to broadcast over any ``ndim`` tensor.
+        """Reshape a ``(C,)`` stats tensor to broadcast over a target tensor or shape.
 
-        For a tensor of shape ``(C, *spatial)`` (ndim-1 trailing dims after C)
-        this returns shape ``(C, 1, 1, ...)``.  For a batched tensor ``(B, C,
-        *spatial)`` this returns ``(1, C, 1, 1, ...)``.
+        Supports:
+        - 3-D unbatched: ``(C, H, W)`` -> channel_dim = 0
+        - 4-D unbatched: ``(C, T, Z, X)`` -> channel_dim = 0
+        - 4-D batched:   ``(B, C, H, W)`` -> channel_dim = 1
+        - 5-D batched:   ``(B, C, T, Z, X)`` -> channel_dim = 1
 
         Parameters
         ----------
         stats : torch.Tensor, shape ``(C,)``
-        ndim : int
-            Number of dimensions in the target tensor (3, 4, or 5).
+        target_or_ndim : torch.Tensor, torch.Size, tuple of int, or int
+            Target tensor, its shape, or the number of dimensions.
+        channel_dim : int, optional
+            Explicit channel dimension index. If None, it is inferred automatically.
         """
-        # ndim=3 → (C,1,1); ndim=4 → (1,C,1,1); ndim=5 → (1,C,1,1,1)
-        if ndim == 3:
-            # Single sample: (C, *spatial)
-            n_trailing = ndim - 1
-            return stats.view(-1, *([1] * n_trailing))
+        if isinstance(target_or_ndim, int):
+            ndim = target_or_ndim
+            target_shape = None
+        elif isinstance(target_or_ndim, torch.Tensor):
+            target_shape = target_or_ndim.shape
+            ndim = target_or_ndim.ndim
         else:
-            # Batched: (B, C, *spatial)
-            n_trailing = ndim - 2
-            return stats.view(1, -1, *([1] * n_trailing))
+            target_shape = tuple(target_or_ndim)
+            ndim = len(target_shape)
+
+        num_channels = stats.numel()
+
+        if channel_dim is None:
+            if ndim == 3:
+                channel_dim = 0
+            elif ndim == 5:
+                channel_dim = 1
+            elif ndim == 4:
+                if target_shape is not None:
+                    if target_shape[0] == num_channels and target_shape[1] != num_channels:
+                        channel_dim = 0
+                    elif target_shape[1] == num_channels and target_shape[0] != num_channels:
+                        channel_dim = 1
+                    else:
+                        # In 3-D FNO, unbatched samples are (C, T, Z, X)
+                        channel_dim = 0
+                else:
+                    # In 3-D FNO, 4-D tensors default to unbatched (C, T, Z, X)
+                    channel_dim = 0
+            else:
+                raise ValueError(
+                    f"Unsupported tensor ndim={ndim} for normalization."
+                )
+
+        view_shape = [1] * ndim
+        view_shape[channel_dim] = -1
+        return stats.view(*view_shape)
 
     # ------------------------------------------------------------------
     # Normalise / denormalise
     # ------------------------------------------------------------------
 
-    def normalize_input(self, x: torch.Tensor) -> torch.Tensor:
+    def normalize_input(
+        self, x: torch.Tensor, channel_dim: Optional[int] = None
+    ) -> torch.Tensor:
         """Normalise input tensor channel-wise.
 
         Parameters
         ----------
         x : torch.Tensor
             Shape ``(C, *spatial)`` or ``(B, C, *spatial)``.
+        channel_dim : int, optional
+            Explicit channel dimension index, by default inferred.
 
         Returns
         -------
@@ -163,42 +201,50 @@ class Normalizer:
             Normalised tensor with the same shape.
         """
         device = x.device
-        mean = self._broadcast_stats(self.input_mean.to(device), x.ndim)
+        mean = self._broadcast_stats(self.input_mean.to(device), x, channel_dim)
         std = self._broadcast_stats(
-            (self.input_std + self.epsilon).to(device), x.ndim
+            (self.input_std + self.epsilon).to(device), x, channel_dim
         )
         return (x - mean) / std
 
-    def normalize_output(self, y: torch.Tensor) -> torch.Tensor:
+    def normalize_output(
+        self, y: torch.Tensor, channel_dim: Optional[int] = None
+    ) -> torch.Tensor:
         """Normalise output tensor channel-wise.
 
         Parameters
         ----------
         y : torch.Tensor
             Shape ``(C, *spatial)`` or ``(B, C, *spatial)``.
+        channel_dim : int, optional
+            Explicit channel dimension index, by default inferred.
         """
         device = y.device
-        mean = self._broadcast_stats(self.output_mean.to(device), y.ndim)
+        mean = self._broadcast_stats(self.output_mean.to(device), y, channel_dim)
         std = self._broadcast_stats(
-            (self.output_std + self.epsilon).to(device), y.ndim
+            (self.output_std + self.epsilon).to(device), y, channel_dim
         )
         return (y - mean) / std
 
-    def denormalize_input(self, x: torch.Tensor) -> torch.Tensor:
+    def denormalize_input(
+        self, x: torch.Tensor, channel_dim: Optional[int] = None
+    ) -> torch.Tensor:
         """Reverse normalisation for input tensors."""
         device = x.device
-        mean = self._broadcast_stats(self.input_mean.to(device), x.ndim)
+        mean = self._broadcast_stats(self.input_mean.to(device), x, channel_dim)
         std = self._broadcast_stats(
-            (self.input_std + self.epsilon).to(device), x.ndim
+            (self.input_std + self.epsilon).to(device), x, channel_dim
         )
         return x * std + mean
 
-    def denormalize_output(self, y: torch.Tensor) -> torch.Tensor:
+    def denormalize_output(
+        self, y: torch.Tensor, channel_dim: Optional[int] = None
+    ) -> torch.Tensor:
         """Reverse normalisation for output tensors."""
         device = y.device
-        mean = self._broadcast_stats(self.output_mean.to(device), y.ndim)
+        mean = self._broadcast_stats(self.output_mean.to(device), y, channel_dim)
         std = self._broadcast_stats(
-            (self.output_std + self.epsilon).to(device), y.ndim
+            (self.output_std + self.epsilon).to(device), y, channel_dim
         )
         return y * std + mean
 

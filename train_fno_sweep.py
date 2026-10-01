@@ -27,6 +27,7 @@ from src.sweep import (
     save_predictions_npz,
     train_one_model,
 )
+from src.sweep.rollout import compute_rel_combined_norm_error
 from train_fno import resolve_device, set_seed
 
 
@@ -122,6 +123,9 @@ def main() -> None:
             disable_scheduler=args.disable_scheduler,
             scheduler_step_size=args.scheduler_step_size,
             scheduler_decay=args.scheduler_decay,
+            dt=args.dt,
+            dz=args.dz,
+            dx=args.dx,
         )
 
         # 1. Save model weights + architecture config.
@@ -136,6 +140,8 @@ def main() -> None:
         loss_json_path = save_loss_history_json(
             train_loss_history=result.train_loss_history,
             val_loss_history=result.val_loss_history,
+            train_rel_combined_norm_history=result.train_rel_combined_norm_history,
+            val_rel_combined_norm_history=result.val_rel_combined_norm_history,
             model_size_label=config.label,
             output_dir=results_dir,
         )
@@ -175,21 +181,37 @@ def main() -> None:
                     targets=train_data["targets"],
                     preds=train_data["preds"],
                 )
+                train_rel_combined_norm = compute_rel_combined_norm_error(
+                    targets=train_data["targets"],
+                    preds=train_data["preds"],
+                    dt=args.dt,
+                    dz=args.dz,
+                    dx=args.dx,
+                )
             else:
                 train_rel_l2_conc, train_rel_l2_head = float("nan"), float("nan")
+                train_rel_combined_norm = float("nan")
 
             if val_data is not None:
                 val_rel_l2_conc, val_rel_l2_head = compute_rel_l2_per_channel(
                     targets=val_data["targets"],
                     preds=val_data["preds"],
                 )
+                val_rel_combined_norm = compute_rel_combined_norm_error(
+                    targets=val_data["targets"],
+                    preds=val_data["preds"],
+                    dt=args.dt,
+                    dz=args.dz,
+                    dx=args.dx,
+                )
             else:
                 val_rel_l2_conc, val_rel_l2_head = float("nan"), float("nan")
+                val_rel_combined_norm = float("nan")
 
             print(
                 f"  scenario={scenario_name} | "
-                f"train_conc={train_rel_l2_conc:.6f}, train_head={train_rel_l2_head:.6f} | "
-                f"val_conc={val_rel_l2_conc:.6f}, val_head={val_rel_l2_head:.6f}"
+                f"train_norm={train_rel_combined_norm:.6f}, train_conc={train_rel_l2_conc:.6f}, train_head={train_rel_l2_head:.6f} | "
+                f"val_norm={val_rel_combined_norm:.6f}, val_conc={val_rel_l2_conc:.6f}, val_head={val_rel_l2_head:.6f}"
             )
 
             npz_path = save_predictions_npz(
@@ -208,6 +230,8 @@ def main() -> None:
                 "scenario_name": scenario_name,
                 "model_size_label": config.label,
                 "total_params": result.total_params,
+                "rel_combined_norm_train": f"{train_rel_combined_norm:.6f}",
+                "rel_combined_norm_val": f"{val_rel_combined_norm:.6f}",
                 "rel_l2_error_concentration_train": f"{train_rel_l2_conc:.6f}",
                 "rel_l2_error_hydraulic_head_train": f"{train_rel_l2_head:.6f}",
                 "rel_l2_error_concentration_val": f"{val_rel_l2_conc:.6f}",

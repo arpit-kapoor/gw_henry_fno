@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -P yl75
+#PBS -P no50
 #PBS -l walltime=12:00:00
 #PBS -q gpuvolta
 #PBS -l ncpus=12
@@ -25,10 +25,15 @@
 # ---------------------------------------------------------------------------
 
 # Name of the dataset archive on scratch (without extension)
-SETTING_NAME="grid_scenarios_random_skip2_20x40"
+SETTING_NAME="grid_scenarios_random_skip2_20x40_new_beta"
 
 # Source archive on RDS/scratch — adjust path as needed
 DATA_ARCHIVE="/scratch/yl75/ak4177/data/simple_henry/${SETTING_NAME}.tar.gz"
+
+if [ ! -f "${DATA_ARCHIVE}" ]; then
+    echo "ERROR: Data archive not found: ${DATA_ARCHIVE}"
+    exit 1
+fi
 
 # Extract to node-local fast storage (PBS_JOBFS)
 tar -xf "${DATA_ARCHIVE}" -C "$PBS_JOBFS/"
@@ -37,29 +42,37 @@ tar -xf "${DATA_ARCHIVE}" -C "$PBS_JOBFS/"
 SCENARIOS_ROOT="$PBS_JOBFS/${SETTING_NAME}"
 
 # Results directory on persistent scratch
-RESULTS_DIR="/scratch/yl75/ak4177/results/groundwater/fno_3d_henry_sweep/${SETTING_NAME}"
+RESULTS_DIR="${RESULTS_DIR:-/scratch/yl75/ak4177/results/groundwater/fno_3d_henry_sweep/${SETTING_NAME}}"
 
 # ---------------------------------------------------------------------------
-# Python environment
+# Python environment & Working Directory
 # ---------------------------------------------------------------------------
 
-# cd into the project root (PBS_O_WORKDIR is the directory qsub was called from;
-# the script lives in scripts/ so move up one level)
-cd "$PBS_O_WORKDIR/.."
+# Prevent cluster-provided Python packages from overriding the venv packages
+unset PYTHONPATH PYTHONHOME
+export PYTHONNOUSERSITE=1
 
-PYTHON_BIN=".venv/bin/python"
+# cd into the project root directory
+if [ -f "train_fno_sweep.py" ]; then
+    :
+elif [ -f "../train_fno_sweep.py" ]; then
+    cd ..
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/train_fno_sweep.py" ]; then
+    cd "${PBS_O_WORKDIR}"
+elif [ -n "${PBS_O_WORKDIR:-}" ] && [ -f "${PBS_O_WORKDIR}/../train_fno_sweep.py" ]; then
+    cd "${PBS_O_WORKDIR}/.."
+else
+    cd /scratch/yl75/ak4177/src/gw_henry_fno
+fi
 
-# ---------------------------------------------------------------------------
-# Sweep configuration
-# ---------------------------------------------------------------------------
+# Activate the virtual environment
+PYTHON_BIN="/scratch/yl75/ak4177/src/GW_SciML/.venv/bin/python"
 
-# Coordinated model-size presets (defined in src/sweep/config.py).
-# Each preset scales hidden_channels, n_modes_t/z/x, and n_layers together.
-MODEL_SIZE_PRESETS="tiny,small,medium,large,huge,massive"
+# Model preset to train: default is "massive", but can be passed via qsub -v MODEL_SIZE_PRESETS=...
+MODEL_SIZE_PRESETS="${MODEL_SIZE_PRESETS:-massive}"
 
-# ---------------------------------------------------------------------------
-# Pre-flight checks
-# ---------------------------------------------------------------------------
+# Number of training epochs (default: 500, can be overridden via qsub -v EPOCHS=...)
+EPOCHS="${EPOCHS:-500}"
 
 if [ ! -x "${PYTHON_BIN}" ]; then
     echo "ERROR: Python executable not found or not executable: ${PYTHON_BIN}"
@@ -71,11 +84,19 @@ if [ ! -d "${SCENARIOS_ROOT}" ]; then
     exit 1
 fi
 
+# Spatial and temporal grid spacing for the TotalNormLoss metric
+# Can be overridden via qsub -v DT=..., DZ=..., DX=...
+DT="${DT:-0.04}"
+DZ="${DZ:-0.05}"
+DX="${DX:-0.05}"
+
 echo "============================================================"
 echo "3-D FNO sweep — ${SETTING_NAME}"
 echo "scenarios root : ${SCENARIOS_ROOT}"
 echo "results dir    : ${RESULTS_DIR}"
 echo "model presets  : ${MODEL_SIZE_PRESETS}"
+echo "epochs         : ${EPOCHS}"
+echo "grid spacing   : dt=${DT}, dz=${DZ}, dx=${DX}"
 echo "device         : GPU (gpuvolta)"
 echo "============================================================"
 
@@ -84,21 +105,25 @@ echo "============================================================"
 # ---------------------------------------------------------------------------
 
 "${PYTHON_BIN}" train_fno_sweep.py \
-    --scenario-dir    "${SCENARIOS_ROOT}"        \
-    --sweep-mode      preset                     \
-    --model-size-presets "${MODEL_SIZE_PRESETS}" \
-    --epochs          500                        \
-    --batch-size      512                        \
-    --learning-rate   8e-4                       \
-    --weight-decay    1e-5                       \
-    --train-ratio     0.7                        \
-    --seed            321                        \
-    --num-workers     4                          \
-    --pin-memory                                 \
-    --normalize                                  \
-    --scheduler-step-size  50                    \
-    --scheduler-decay      0.80                  \
-    --results-dir     "${RESULTS_DIR}"
+    --scenario-dir        "${SCENARIOS_ROOT}"        \
+    --sweep-mode          preset                     \
+    --model-size-presets  "${MODEL_SIZE_PRESETS}"    \
+    --epochs              "${EPOCHS}"                \
+    --batch-size          152                        \
+    --learning-rate       1e-4                       \
+    --weight-decay        1e-5                       \
+    --train-ratio         0.7                        \
+    --seed                31                        \
+    --num-workers         4                          \
+    --pin-memory                                     \
+    --normalize                                      \
+    --scheduler-step-size 50                         \
+    --scheduler-decay     0.75                       \
+    --results-dir         "${RESULTS_DIR}"           \
+    --device              "${DEVICE:-cuda}"          \
+    --dt                  "${DT}"                    \
+    --dz                  "${DZ}"                    \
+    --dx                  "${DX}"
 
 # ---------------------------------------------------------------------------
 # Exit handling
@@ -111,6 +136,6 @@ if [ "${status}" -ne 0 ]; then
 fi
 
 echo "============================================================"
-echo "Sweep completed successfully."
+echo "Sweep completed successfully for preset(s): ${MODEL_SIZE_PRESETS}"
 echo "Results written to: ${RESULTS_DIR}"
 echo "============================================================"

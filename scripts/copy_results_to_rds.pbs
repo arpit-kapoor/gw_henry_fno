@@ -2,7 +2,7 @@
 
 #PBS -P yl75
 #PBS -N results-transfer
-#PBS -l walltime=04:00:00
+#PBS -l walltime=01:00:00
 #PBS -l ncpus=1
 #PBS -l mem=8GB
 #PBS -W umask=022
@@ -22,13 +22,18 @@ remote_host=research-data-ext.sydney.edu.au
 remote_path=/rds/${RDSPROJECT}/results/simple_henry/
 
 # Gadi:
-results_dirname=grid_scenarios_20x40
+results_dirname=grid_scenarios_random_skip2_20x40
 filename=${results_dirname}.tar.gz
-results_parent_path=/scratch/yl75/${USER}/results/groundwater/fno_simple_henry_sweep/
+results_parent_path=/scratch/yl75/${USER}/results/groundwater/fno_3d_henry_sweep/
 
 # Create a tar of the results folder
 cd ${results_parent_path}
 tar -czf ${filename} ${results_dirname}
 
+echo "File created: ${results_parent_path}${filename}"
+echo "Transferring results to RDS..."
+
 # Copy tar with sftp
 sftp ${remote_user}@${remote_host}:${remote_path} <<< $"put -r ${filename}"
+
+echo "Transfer complete. You can now delete the local copy of the results tar if desired."

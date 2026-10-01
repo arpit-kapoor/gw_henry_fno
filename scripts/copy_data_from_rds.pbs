@@ -2,7 +2,7 @@
 
 #PBS -P yl75
 #PBS -N data-transfer
-#PBS -l walltime=04:00:00
+#PBS -l walltime=01:00:00
 #PBS -l ncpus=1
 #PBS -l mem=8GB
 #PBS -W umask=022
@@ -18,7 +18,7 @@ remote_host=research-data-ext.sydney.edu.au
 
 # NOTE: Add a trailing slash (/) to remote_path if you don't want to create the
 # parent directory at the destination. 
-filename=grid_scenarios_lag10_20x40.tar.gz
+filename=grid_scenarios_random_skip2_20x40_new_beta.tar.gz
 remote_path=/rds/${RDSPROJECT}/data/simple_henry/${filename}
 
 # Gadi:

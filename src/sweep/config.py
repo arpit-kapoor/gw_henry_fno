@@ -64,6 +64,8 @@ SWEEP_CSV_FIELDNAMES = [
     "scenario_name",
     "model_size_label",
     "total_params",
+    "rel_combined_norm_train",
+    "rel_combined_norm_val",
     "rel_l2_error_concentration_train",
     "rel_l2_error_hydraulic_head_train",
     "rel_l2_error_concentration_val",
@@ -135,6 +137,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Run validation every N epochs during training",
+    )
+
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=1.0,
+        help="Time step size for RelCombinedNormLoss.",
+    )
+    
+    parser.add_argument(
+        "--dx",
+        type=float,
+        default=0.05,
+        help="Horizontal grid spacing (dx) for RelCombinedNormLoss.",
+    )
+
+    parser.add_argument(
+        "--dz",
+        type=float,
+        default=0.05,
+        help="Vertical grid spacing (dz) for RelCombinedNormLoss.",
     )
 
     return parser

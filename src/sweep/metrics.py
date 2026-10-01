@@ -2,35 +2,55 @@ from __future__ import annotations
 
 import torch
 
-from src.neuralop.losses import LpLoss
+from src.neuralop.losses import LpLoss, RelCombinedNormLoss
 
+
+def evaluate_losses(
+    model: torch.nn.Module,
+    dataloader,
+    device: torch.device,
+    dt: float = 1.0,
+    dz: float = 0.05,
+    dx: float = 0.05,
+) -> tuple[float, float]:
+    """Evaluate mean relative L2 loss and RelCombinedNormLoss across a dataloader.
+
+    Returns
+    -------
+    float, float
+        Mean per-sample relative L2, and Mean per-sample RelCombinedNormLoss across all batches.
+    """
+    model.eval()
+    total_l2_loss = 0.0
+    rel_combined_norm_loss = 0.0
+    total_samples = 0
+    lploss_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions="mean")
+    rel_combined_norm_criterion = RelCombinedNormLoss(dt=dt, dz=dz, dx=dx)
+
+    with torch.no_grad():
+        for xb, yb in dataloader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            pred = model(xb)
+            
+            loss_l2 = lploss_criterion(pred, yb)
+            loss_norm = rel_combined_norm_criterion(pred, yb)
+            
+            total_l2_loss += loss_l2.item() * xb.size(0)
+            rel_combined_norm_loss += loss_norm.item() * xb.size(0)
+            total_samples += xb.size(0)
+
+    if total_samples == 0:
+        raise ValueError("Dataloader produced zero samples during evaluation")
+
+    return total_l2_loss / total_samples, rel_combined_norm_loss / total_samples
 
 def evaluate_l2(
     model: torch.nn.Module,
     dataloader,
     device: torch.device,
 ) -> float:
-    """Evaluate mean relative L2 loss across a dataloader.
-
-    Uses ``LpLoss(d=3)`` to match the 3-D (time × vertical × horizontal)
-    training objective.  Computes the per-sample mean relative-L2 in
-    normalised space for convergence monitoring.
-
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Trained or partially trained FNO.
-    dataloader :
-        Validation (or training) DataLoader yielding ``(x, y)`` batches of
-        shape ``(B, C, T, Z, X)``.
-    device : torch.device
-        Inference device.
-
-    Returns
-    -------
-    float
-        Mean per-sample relative L2 across all batches.
-    """
+    # Keeping this for backwards compatibility if used elsewhere
     model.eval()
     total_loss = 0.0
     total_samples = 0

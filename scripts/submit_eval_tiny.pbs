@@ -1,0 +1,21 @@
+#!/bin/bash
+#PBS -P yl75
+#PBS -l walltime=01:00:00
+#PBS -q gpuvolta
+#PBS -l ncpus=12
+#PBS -l ngpus=1
+#PBS -l mem=95GB
+#PBS -l jobfs=10GB
+#PBS -l wd
+#PBS -l storage=scratch/yl75
+#PBS -N eval_tiny
+#PBS -j oe
+
+unset PYTHONPATH PYTHONHOME
+export PYTHONNOUSERSITE=1
+
+PYTHON_BIN="/scratch/yl75/ak4177/src/GW_SciML/.venv/bin/python"
+
+echo "Evaluating tiny model..."
+"${PYTHON_BIN}" eval_tiny.py
+echo "Done!"

@@ -111,6 +111,8 @@ def save_loss_history_json(
     *,
     train_loss_history: list[float],
     val_loss_history: list[float],
+    train_rel_combined_norm_history: list[float],
+    val_rel_combined_norm_history: list[float],
     model_size_label: str,
     output_dir: Path,
 ) -> Path:
@@ -128,6 +130,10 @@ def save_loss_history_json(
         Per-epoch training loss (relative L2, normalised space).
     val_loss_history:
         Per-epoch validation loss (relative L2, normalised space).
+    train_rel_combined_norm_history:
+        Per-epoch training RelCombinedNorm loss.
+    val_rel_combined_norm_history:
+        Per-epoch validation RelCombinedNorm loss.
     model_size_label:
         Used in the file name.
     output_dir:
@@ -145,6 +151,8 @@ def save_loss_history_json(
         "model_size_label": model_size_label,
         "train_loss_history": train_loss_history,
         "val_loss_history": val_loss_history,
+        "train_rel_combined_norm_history": train_rel_combined_norm_history,
+        "val_rel_combined_norm_history": val_rel_combined_norm_history,
     }
     with out_path.open("w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)

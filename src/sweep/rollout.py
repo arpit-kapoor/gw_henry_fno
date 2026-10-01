@@ -69,8 +69,8 @@ def collect_predictions_by_scenario(
                 pred_norm = model(x_dev).squeeze(0)         # (C_out, T_out, Z, X)
 
                 if normalizer is not None:
-                    pred_denorm = normalizer.denormalize_output(pred_norm.unsqueeze(0)).squeeze(0)
-                    gt_denorm = normalizer.denormalize_output(y.unsqueeze(0).to(device)).squeeze(0)
+                    pred_denorm = normalizer.denormalize_output(pred_norm)
+                    gt_denorm = normalizer.denormalize_output(y.to(device))
                 else:
                     pred_denorm = pred_norm
                     gt_denorm = y.to(device)
@@ -124,3 +124,72 @@ def compute_rel_l2_per_channel(
 
     mean_rel_l2 = rel_l2.mean(axis=0)                        # (C_out,)
     return float(mean_rel_l2[0]), float(mean_rel_l2[1])
+
+def compute_linf_l2_norm(u, dx, dz, dt):
+    area = dz*dx
+
+    # Squared Norm
+    l2_sq_u_space = np.sum(u**2, axis=(2, 3)) * area 
+    l_inf_l2_sq_u = np.max(l2_sq_u_space, axis=1)  
+
+    # Sum over time of spatial gradient L2 norm squared
+    # Compute spatial gradients over Z (axis 2) and X (axis 3) using actual spacing
+    grad_u_z, grad_u_x = np.gradient(u, dz, dx, axis=(2, 3))
+    grad_u_l2_sq_space = np.sum(grad_u_z**2 + grad_u_x**2, axis=(2, 3)) * area 
+    grad_u_l2_l2_sq = np.sum(grad_u_l2_sq_space, axis=1) * dt
+
+    # Final u norm for each run
+    norm_u = np.sqrt(l_inf_l2_sq_u + grad_u_l2_l2_sq) 
+
+    return norm_u
+
+def compute_l2_norm(u, dx, dz, dt):
+    area = dz*dx
+
+    # Spatial L2 norm squared at each time step
+    l2_sq_u_space = np.sum(u**2, axis=(2, 3)) * area 
+
+    # Spatial gradient L2 norm squared at each time step
+    grad_u_z, grad_u_x = np.gradient(u, dz, dx, axis=(2, 3))
+    grad_u_l2_sq_space = np.sum(grad_u_z**2 + grad_u_x**2, axis=(2, 3)) * area 
+
+    # ||p(t)||_{H^1}^2 = L2^2 + \nabla L2^2
+    h1_sq_u = l2_sq_u_space + grad_u_l2_sq_space 
+
+    # Final p norm for each run: Max over time of the H^1 norm
+    norm_u = np.max(np.sqrt(h1_sq_u), axis=1)
+
+    return norm_u
+
+def compute_rel_combined_norm_error(targets: np.ndarray, preds: np.ndarray, dt: float=1.0, dz: float=0.05, dx: float=0.05) -> float:
+    """Compute physics-informed relative combined norm error averaged over all runs."""
+    # Compute area of the domain
+    area = dz * dx
+
+    # Residual
+    diff = preds - targets
+    
+    # Assuming Channel 0 = Concentration (C), Channel 1 = Pressure/Head (p)
+    diff_c = diff[..., 0]  # shape: (N, T, Z, X)
+    diff_h = diff[..., 1]  # shape: (N, T, Z, X)
+
+    # =====================================================================
+    # 1. Concentration Norm: ||C||_{\mathcal{C}_T}
+    # =====================================================================
+    norm_c_diff = compute_linf_l2_norm(diff_c, dx, dz, dt)
+    norm_c_true = compute_linf_l2_norm(targets[...,0], dx, dz, dt)
+    norm_c = norm_c_diff / (norm_c_true + 1e-12)
+
+    # =====================================================================
+    # 2. Pressure/Head Norm: ||p||_{L^\infty H^1}
+    # =====================================================================
+    norm_h_diff = compute_l2_norm(diff_h, dx, dz, dt)
+    norm_h_true = compute_l2_norm(targets[...,1], dx, dz, dt)
+    norm_h = norm_h_diff / (norm_h_true + 1e-12)
+    
+    # =====================================================================
+    # 3. Combined Total Metric: ||(C, p)||_{\mathcal{Z}_T}
+    # =====================================================================
+    rel_combined_norm = norm_c + norm_h 
+
+    return float(np.mean(rel_combined_norm))
