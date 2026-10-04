@@ -9,7 +9,7 @@ from functools import reduce
 from functools import partial
 
 from .conv import SpectralConv
-from .mlp import MLP
+from .mlp import MLP, pointwise_conv
 
 
 class FNOBlocks(nn.Module):
@@ -99,7 +99,7 @@ class FNOBlocks(nn.Module):
         """
         for layer_idx in range(self.n_layers):
             # Compute skip connection for this layer
-            x_skip_fno = self.fno_skips[layer_idx](x)
+            x_skip_fno = pointwise_conv(self.fno_skips[layer_idx], x)
             # Apply spectral convolution for this layer
             if isinstance(output_shape, list):
                 out_shape = output_shape[layer_idx] if layer_idx < len(output_shape) else None

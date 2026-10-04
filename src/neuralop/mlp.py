@@ -3,6 +3,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def pointwise_conv(conv, x):
+    """Apply a kernel-size-1 ``nn.ConvNd`` to channel-first ``x``.
+
+    On Apple MPS the 1x1 convolution kernels are several times slower (and use
+    more memory) than the equivalent channel matmul, so compute it as
+    ``W @ x`` there. Uses the conv's own parameters, so checkpoints are
+    unaffected.
+    """
+    if x.device.type != "mps":
+        return conv(x)
+    y = torch.matmul(conv.weight.flatten(1), x.flatten(2))
+    if conv.bias is not None:
+        y = y + conv.bias[:, None]
+    return y.view(x.shape[0], -1, *x.shape[2:])
+
+
 class MLP(nn.Module):
     """A Multi-Layer Perceptron, with arbitrary number of layers
 
@@ -58,6 +74,8 @@ class MLP(nn.Module):
                 self.fcs.append(Conv(self.hidden_channels, self.hidden_channels, 1))
 
     def forward(self, x):
+        if x.device.type == "mps":
+            return self._forward_channels_last(x)
         for i, fc in enumerate(self.fcs):
             x = fc(x)
             if i < self.n_layers - 1:
@@ -66,3 +84,19 @@ class MLP(nn.Module):
                 x = self.dropout[i](x)
 
         return x
+
+    def _forward_channels_last(self, x):
+        """Same as :meth:`forward`, computed in channels-last layout.
+
+        On MPS a fused ``F.linear`` over (B, *S, C) is much faster than a
+        channel-first matmul plus a separate bias add, and the wide hidden
+        activations are never permuted -- only the narrow input and output.
+        """
+        x = x.movedim(1, -1)
+        for i, fc in enumerate(self.fcs):
+            x = F.linear(x, fc.weight.flatten(1), fc.bias)
+            if i < self.n_layers - 1:
+                x = self.non_linearity(x)
+            if self.dropout is not None:
+                x = self.dropout[i](x)
+        return x.movedim(-1, 1).contiguous()

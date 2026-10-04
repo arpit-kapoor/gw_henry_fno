@@ -12,8 +12,13 @@ def evaluate_losses(
     dt: float = 1.0,
     dz: float = 0.05,
     dx: float = 0.05,
+    micro_batch_size: int = 0,
 ) -> tuple[float, float]:
     """Evaluate mean relative L2 loss and RelCombinedNormLoss across a dataloader.
+
+    If ``micro_batch_size`` > 0, each batch is evaluated in chunks of that size
+    to bound peak memory; both losses are per-sample means, so the result is
+    unchanged.
 
     Returns
     -------
@@ -28,17 +33,19 @@ def evaluate_losses(
     rel_combined_norm_criterion = RelCombinedNormLoss(dt=dt, dz=dz, dx=dx)
 
     with torch.no_grad():
-        for xb, yb in dataloader:
-            xb = xb.to(device)
-            yb = yb.to(device)
-            pred = model(xb)
-            
-            loss_l2 = lploss_criterion(pred, yb)
-            loss_norm = rel_combined_norm_criterion(pred, yb)
-            
-            total_l2_loss += loss_l2.item() * xb.size(0)
-            rel_combined_norm_loss += loss_norm.item() * xb.size(0)
-            total_samples += xb.size(0)
+        for xb_full, yb_full in dataloader:
+            chunk_size = micro_batch_size if micro_batch_size > 0 else xb_full.size(0)
+            for xb, yb in zip(xb_full.split(chunk_size), yb_full.split(chunk_size)):
+                xb = xb.to(device)
+                yb = yb.to(device)
+                pred = model(xb)
+
+                loss_l2 = lploss_criterion(pred, yb)
+                loss_norm = rel_combined_norm_criterion(pred, yb)
+
+                total_l2_loss += loss_l2.item() * xb.size(0)
+                rel_combined_norm_loss += loss_norm.item() * xb.size(0)
+                total_samples += xb.size(0)
 
     if total_samples == 0:
         raise ValueError("Dataloader produced zero samples during evaluation")

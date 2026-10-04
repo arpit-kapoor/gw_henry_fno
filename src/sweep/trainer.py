@@ -59,6 +59,7 @@ def train_one_model(
     dt: float = 1.0,
     dz: float = 0.05,
     dx: float = 0.05,
+    micro_batch_size: int = 0,
 ) -> TrainOneModelResult:
     """Train one 3-D FNO configuration and return results for the sweep."""
     if eval_every <= 0:
@@ -131,28 +132,42 @@ def train_one_model(
         total_samples = 0
 
         for xb, yb in train_loader:
-            xb = xb.to(device, non_blocking=(device.type == "cuda"))
-            yb = yb.to(device, non_blocking=(device.type == "cuda"))
+            batch_size = xb.size(0)
+            chunk_size = micro_batch_size if 0 < micro_batch_size < batch_size else batch_size
 
             optimizer.zero_grad(set_to_none=True)
-            pred = model(xb)
-            
-            # Forward pass with new loss
-            loss = train_criterion(pred, yb)
-            loss.backward()
+            for xm, ym in zip(xb.split(chunk_size), yb.split(chunk_size)):
+                xm = xm.to(device, non_blocking=(device.type == "cuda"))
+                ym = ym.to(device, non_blocking=(device.type == "cuda"))
+                pred = model(xm)
+
+                # Forward pass with new loss. Weighting each chunk by its share
+                # of the batch makes the accumulated gradient equal to that of
+                # the full-batch mean loss.
+                loss = train_criterion(pred, ym)
+                (loss * (xm.size(0) / batch_size)).backward()
+
+                with torch.no_grad():
+                    running_norm_loss += loss.item() * xm.size(0)
+                    # Already a sum of per-sample relative L2 over the chunk,
+                    # so dividing by total_samples gives the per-sample mean
+                    # (same scale as val_l2).
+                    running_lploss += lploss_accum_criterion(pred, ym).item()
             optimizer.step()
 
-            batch_size = xb.size(0)
-            with torch.no_grad():
-                running_norm_loss += loss.item() * batch_size
-                running_lploss += lploss_accum_criterion(pred, yb).item() * batch_size
-                
             total_samples += batch_size
 
         epoch_train_l2 = running_lploss / total_samples
         epoch_train_norm = running_norm_loss / total_samples
         
-        epoch_val_l2, epoch_val_norm = evaluate_losses(model, val_loader, device, dt=dt, dz=dz, dx=dx)
+        epoch_val_l2, epoch_val_norm = evaluate_losses(
+            model, val_loader, device, dt=dt, dz=dz, dx=dx, micro_batch_size=micro_batch_size
+        )
+        if device.type == "mps":
+            # The MPS allocator caches a block per distinct tensor size (e.g. the
+            # ragged last chunk) and never returns them; without this the pool
+            # grows every epoch until macOS starts swapping.
+            torch.mps.empty_cache()
         
         train_loss_history.append(epoch_train_l2)
         val_loss_history.append(epoch_val_l2)

@@ -77,6 +77,7 @@ def main() -> None:
             f"n_layers={args.n_layers}"
         )
     print(f"train_ratio: {args.train_ratio}, seed: {args.seed}")
+    print(f"device: {device}, batch_size: {args.batch_size}, micro_batch_size: {args.micro_batch_size or 'off'}")
     print(f"results csv: {csv_path}")
 
     for config in sweep_configs:
@@ -106,6 +107,7 @@ def main() -> None:
             scenarios_dir=scenarios_dir,
             epochs=args.epochs,
             batch_size=args.batch_size,
+            micro_batch_size=args.micro_batch_size,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             eval_every=args.eval_every,

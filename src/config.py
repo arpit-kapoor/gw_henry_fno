@@ -34,6 +34,16 @@ def add_training_args(
     """Register training-loop and optimizer hyperparameters."""
     parser.add_argument("--epochs", type=int, default=default_epochs, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=default_batch_size, help="Batch size")
+    parser.add_argument(
+        "--micro-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "Split each batch into chunks of this size and accumulate gradients. "
+            "Gives the same optimizer update as --batch-size with lower peak memory. "
+            "0 disables (default)"
+        ),
+    )
     parser.add_argument("--learning-rate", type=float, default=default_learning_rate, help="Optimizer learning rate")
     parser.add_argument("--weight-decay", type=float, default=default_weight_decay, help="AdamW weight decay")
 
@@ -157,6 +167,8 @@ def validate_common_args(parser: argparse.ArgumentParser, args: argparse.Namespa
         parser.error("--epochs must be > 0")
     if args.batch_size <= 0:
         parser.error("--batch-size must be > 0")
+    if getattr(args, "micro_batch_size", 0) < 0:
+        parser.error("--micro-batch-size must be >= 0")
     if not (0.0 < args.train_ratio < 1.0):
         parser.error("--train-ratio must be in (0, 1)")
     if hasattr(args, "scheduler_step_size") and args.scheduler_step_size <= 0:

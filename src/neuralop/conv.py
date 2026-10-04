@@ -175,6 +175,9 @@ class SpectralConv(nn.Module):
         -------
         tensorized_spectral_conv(x)
         """
+        if x.device.type == "mps" and output_shape is None:
+            return self._forward_dft(x, indices)
+
         batchsize, channels, *mode_sizes = x.shape
 
         fft_size = list(mode_sizes)
@@ -208,6 +211,171 @@ class SpectralConv(nn.Module):
             out_fft = torch.fft.fftshift(out_fft, dim=fft_dims[:-1])
             
         x = torch.fft.irfftn(out_fft, s=mode_sizes, dim=fft_dims, norm=self.fft_norm)
+
+        if self.bias is not None:
+            x = x + self.bias[indices, ...]
+
+        return x
+
+    def _kept_mode_bins(self, mode_sizes, weight_modes):
+        """FFT bin indices kept by the FFT path, per spatial dim.
+
+        Returns ``[(in_bins, out_bins), ...]``: ``in_bins[j]`` is the frequency
+        bin of ``rfftn(x)`` feeding mode slot ``j`` of the weight, and
+        ``out_bins[j]`` is the bin of ``irfftn``'s input that slot ``j`` is
+        written to. They are derived by replaying the fftshift/slice/fftshift
+        sequence of :meth:`forward` on index arrays, so both paths stay
+        identical (including for odd sizes, where the two fftshifts do not
+        cancel).
+        """
+        fft_size = list(mode_sizes)
+        fft_size[-1] = fft_size[-1] // 2 + 1
+        bins = []
+        for dim, (size, n_mode) in enumerate(zip(fft_size, weight_modes)):
+            start = size - min(size, n_mode)
+            idx = torch.arange(size)
+            if dim == self.order - 1:
+                kept = slice(None, -start) if start else slice(None)
+                bins.append((idx[kept], idx[kept]))
+                continue
+            kept = slice(start // 2, -start // 2) if start else slice(start, None)
+            in_bins = torch.fft.fftshift(idx)[kept]
+            slot = torch.full((size,), -1, dtype=torch.long)
+            slot[kept] = torch.arange(len(in_bins))
+            slot = torch.fft.fftshift(slot)
+            out_bins = torch.empty_like(in_bins)
+            out_bins[slot[slot >= 0]] = idx[slot >= 0]
+            bins.append((in_bins, out_bins))
+        return bins
+
+    def _dft_matrices(self, mode_sizes, weight_modes, device, dtype):
+        """Real-valued truncated DFT matrices for :meth:`_forward_dft` (cached).
+
+        The first spatial dim (when there are several) is transformed on its
+        own: ``fwd_lead`` is ``(2m, n)`` and ``inv_lead`` is ``(2n, m)``, the
+        real and imaginary parts of a complex matrix stacked along rows and
+        applied from the left. The remaining dims are flattened and handled by
+        one Kronecker-product matrix applied from the right, ``fwd_trail`` as
+        ``(re, im)`` of shape ``(N, M)`` and ``inv_trail`` as ``(re, -im)`` of
+        shape ``(M, N)``, with the irfft Hermitian weights and the FFT
+        normalisation folded in. Both are large contiguous matmuls, which MPS
+        handles far better than many tiny batched ones.
+        """
+        key = (tuple(mode_sizes), tuple(weight_modes), device, dtype)
+        cache = self.__dict__.setdefault("_dft_cache", {})
+        if key in cache:
+            return cache[key]
+
+        n_total = 1
+        for n in mode_sizes:
+            n_total *= n
+        fwd_scale, inv_scale = {
+            "backward": (1.0, 1.0 / n_total),
+            "forward": (1.0 / n_total, 1.0),
+            "ortho": (n_total ** -0.5, n_total ** -0.5),
+        }[self.fft_norm]
+
+        def phase(n, k):
+            # exp(i * 2*pi * k * t / n) of shape (n, len(k)), reducing k*t
+            # mod n exactly before going to floating point.
+            t = torch.arange(n)
+            angle = 2 * torch.pi * ((t[:, None] * k[None, :]) % n).double() / n
+            return torch.polar(torch.ones_like(angle), angle)
+
+        fwd, inv = [], []
+        bins = self._kept_mode_bins(mode_sizes, weight_modes)
+        for dim, (n, (in_bins, out_bins)) in enumerate(zip(mode_sizes, bins)):
+            fwd.append(phase(n, in_bins).conj())  # (n, m), kernel exp(-i...)
+            inv.append(phase(n, out_bins).T)  # (m, n), kernel exp(+i...)
+        # irfft along the last dim: Hermitian weights, imag of DC/Nyquist dropped.
+        n = mode_sizes[-1]
+        herm = torch.full((len(bins[-1][1]), 1), 2.0, dtype=torch.float64)
+        herm[bins[-1][1] == 0] = 1.0
+        if n % 2 == 0:
+            herm[bins[-1][1] == n // 2] = 1.0
+        inv[-1] = inv[-1] * herm
+
+        n_lead = 1 if self.order > 1 else 0
+        fwd_trail, inv_trail = fwd[n_lead], inv[n_lead]
+        for f, e in zip(fwd[n_lead + 1 :], inv[n_lead + 1 :]):
+            fwd_trail = torch.kron(fwd_trail, f)
+            inv_trail = torch.kron(inv_trail, e)
+        fwd_trail = fwd_trail * fwd_scale
+        inv_trail = inv_trail * inv_scale
+
+        def to(m):
+            return m.to(device=device, dtype=dtype)
+
+        mats = {
+            "fwd_trail": (to(fwd_trail.real), to(fwd_trail.imag)),
+            "inv_trail": (to(inv_trail.real), to(-inv_trail.imag)),
+        }
+        if n_lead:
+            mats["fwd_lead"] = to(torch.cat([fwd[0].T.real, fwd[0].T.imag]))
+            mats["inv_lead"] = to(torch.cat([inv[0].T.real, inv[0].T.imag]))
+        cache[key] = mats
+        return mats
+
+    def _forward_dft(self, x: torch.Tensor, indices=0):
+        """Same result as :meth:`forward`, using only real-valued matmuls.
+
+        Used on Apple MPS, where complex tensors are not supported by the
+        gather/scatter kernels. Because only a handful of Fourier modes are
+        kept, explicit truncated DFTs are cheap and map onto fast matmuls.
+        Real and imaginary parts are kept as separate contiguous tensors so
+        every transform is a matmul on a view (no permute copies, which are
+        slow on MPS).
+        """
+        batchsize, channels, *mode_sizes = x.shape
+        fft_size = list(mode_sizes)
+        fft_size[-1] = fft_size[-1] // 2 + 1
+
+        # Same weight slicing as forward(); the raw parameter is (in, out, *modes, 2).
+        starts = [(max_modes - min(size, n_mode)) for (size, n_mode, max_modes) in zip(fft_size, self.n_modes, self.max_n_modes)]
+        slices_w =  [slice(None), slice(None)]
+        slices_w += [slice(start//2, -start//2) if start else slice(start, None) for start in starts[:-1]]
+        slices_w += [slice(None, -starts[-1]) if starts[-1] else slice(None)]
+        weight = self._get_weight(indices)._parameters["tensor"][tuple(slices_w)]
+        weight_modes = weight.shape[2:-1]
+
+        mats = self._dft_matrices(mode_sizes, weight_modes, x.device, x.dtype)
+        has_lead = self.order > 1
+
+        def along_lead(z_re, z_im, mat):
+            # Left-multiply the first spatial dim (axis 2) of z by ``mat``.
+            b, c, n, rest = z_re.shape
+            p_re = mat @ z_re.reshape(b * c, n, rest)
+            p_im = mat @ z_im.reshape(b * c, n, rest)
+            m = mat.shape[0] // 2
+            return (
+                (p_re[:, :m] - p_im[:, m:]).view(b, c, m, rest),
+                (p_re[:, m:] + p_im[:, :m]).view(b, c, m, rest),
+            )
+
+        # Forward truncated DFT: trailing dims (real -> complex), then the first.
+        if has_lead:
+            x = x.reshape(batchsize, channels, mode_sizes[0], -1)
+        k_re, k_im = mats["fwd_trail"]
+        z_re, z_im = x @ k_re, x @ k_im
+        if has_lead:
+            z_re, z_im = along_lead(z_re, z_im, mats["fwd_lead"])
+
+        # Complex channel contraction with the (in, out, *modes, 2) weight.
+        w_re, w_im = weight[..., 0], weight[..., 1]
+        w_block = torch.cat(
+            [torch.cat([w_re, w_im], 1), torch.cat([-w_im, w_re], 1)], 0
+        ).flatten(2)  # (2C_in, 2C_out, K)
+        z = torch.cat([z_re, z_im], 1).flatten(2)  # (B, 2C_in, K)
+        z = torch.einsum("bik,iok->bok", z, w_block)
+        out_shape = (batchsize, self.out_channels, *z_re.shape[2:])
+        z_re = z[:, : self.out_channels].reshape(out_shape)
+        z_im = z[:, self.out_channels :].reshape(out_shape)
+
+        # Inverse truncated DFT: first dim, then trailing dims (complex -> real).
+        if has_lead:
+            z_re, z_im = along_lead(z_re, z_im, mats["inv_lead"])
+        q_re, q_im = mats["inv_trail"]
+        x = (z_re @ q_re + z_im @ q_im).reshape(batchsize, self.out_channels, *mode_sizes)
 
         if self.bias is not None:
             x = x + self.bias[indices, ...]
