@@ -20,13 +20,15 @@ def collect_predictions_by_scenario(
     dataset: HenryScenarioDataset,
     device: torch.device,
     normalizer=None,
+    batch_size: int = 64,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Collect one-shot predictions grouped by scenario.
 
     For each run in the dataset, performs a single forward pass through the
-    3-D FNO to obtain the full predicted output trajectory.  Results are
-    grouped by scenario name and stacked into arrays of shape
-    ``(N_runs, T_out, Z, X, C_out)``.
+    3-D FNO to obtain the full predicted output trajectory.  Runs are pushed
+    through the model ``batch_size`` at a time (in the main process, no
+    DataLoader workers).  Results are grouped by scenario name and stacked
+    into arrays of shape ``(N_runs, T_out, Z, X, C_out)``.
 
     Parameters
     ----------
@@ -39,6 +41,8 @@ def collect_predictions_by_scenario(
     normalizer :
         Optional :class:`~src.data.normalizer.Normalizer` used during
         training.  Predictions and targets are denormalised before storage.
+    batch_size : int, optional
+        Number of runs per forward pass (default 64).
 
     Returns
     -------
@@ -46,6 +50,9 @@ def collect_predictions_by_scenario(
         Mapping ``scenario_name -> {"targets": arr, "preds": arr}`` where each
         array has shape ``(N_runs, T_out, Z, X, C_out)``.
     """
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be > 0, got {batch_size}")
+
     model.eval()
 
     # Group sample dataset-indices by scenario.
@@ -60,32 +67,33 @@ def collect_predictions_by_scenario(
         targets_list: list[np.ndarray] = []
         preds_list: list[np.ndarray] = []
 
-        for sample_idx in sample_indices:
-            x, y = dataset[sample_idx]
-            # x: (C_in, T_in, Z, X), y: (C_out, T_out, Z, X) — normalised if normalizer is set.
+        for start in range(0, len(sample_indices), batch_size):
+            batch_indices = sample_indices[start:start + batch_size]
+            samples = [dataset[i] for i in batch_indices]
+            # x: (B, C_in, T_in, Z, X), y: (B, C_out, T_out, Z, X) — normalised if normalizer is set.
+            x = torch.stack([s[0] for s in samples])
+            y = torch.stack([s[1] for s in samples])
 
             with torch.no_grad():
-                x_dev = x.unsqueeze(0).to(device)          # (1, C_in, T_in, Z, X)
-                pred_norm = model(x_dev).squeeze(0)         # (C_out, T_out, Z, X)
+                x_dev = x.to(device)
+                y_dev = y.to(device)
+                pred_norm = model(x_dev)                    # (B, C_out, T_out, Z, X)
 
                 if normalizer is not None:
                     pred_denorm = normalizer.denormalize_output(pred_norm)
-                    gt_denorm = normalizer.denormalize_output(y.to(device))
+                    gt_denorm = normalizer.denormalize_output(y_dev)
                 else:
                     pred_denorm = pred_norm
-                    gt_denorm = y.to(device)
+                    gt_denorm = y_dev
 
-            # Permute to (T_out, Z, X, C_out) for storage.
-            preds_np = pred_denorm.detach().cpu().permute(1, 2, 3, 0).numpy()    # (T, Z, X, C)
-            targets_np = gt_denorm.detach().cpu().permute(1, 2, 3, 0).numpy()    # (T, Z, X, C)
+            # Permute to (B, T_out, Z, X, C_out) for storage.
+            preds_list.append(pred_denorm.detach().cpu().permute(0, 2, 3, 4, 1).numpy())
+            targets_list.append(gt_denorm.detach().cpu().permute(0, 2, 3, 4, 1).numpy())
 
-            preds_list.append(preds_np)
-            targets_list.append(targets_np)
-
-        # Stack runs: list of (T, Z, X, C) → (N_runs, T, Z, X, C)
+        # Concatenate batches: list of (B, T, Z, X, C) → (N_runs, T, Z, X, C)
         results[scenario_name] = {
-            "targets": np.stack(targets_list, axis=0),
-            "preds":   np.stack(preds_list,   axis=0),
+            "targets": np.concatenate(targets_list, axis=0),
+            "preds":   np.concatenate(preds_list,   axis=0),
         }
 
     return results

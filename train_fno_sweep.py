@@ -8,6 +8,7 @@ FNO predicts the full output trajectory ``(C_out, T_out, Z, X)`` from
 """
 
 import gc
+import time
 from datetime import datetime
 
 import torch
@@ -153,21 +154,30 @@ def main() -> None:
         val_dataset = result.val_loader.dataset
 
         # 3. Collect per-scenario predictions for both splits.
+        # Inference needs less memory than training, so the training batch size is safe here.
+        predict_batch_size = args.micro_batch_size or args.batch_size
+
         print(f"Collecting train predictions for {config.label} ...")
+        t0 = time.perf_counter()
         train_preds_by_scenario = collect_predictions_by_scenario(
             model=result.model,
             dataset=train_dataset,
             device=device,
             normalizer=result.normalizer,
+            batch_size=predict_batch_size,
         )
+        print(f"Collected train predictions in {time.perf_counter() - t0:.1f} s")
 
         print(f"Collecting val predictions for {config.label} ...")
+        t0 = time.perf_counter()
         val_preds_by_scenario = collect_predictions_by_scenario(
             model=result.model,
             dataset=val_dataset,
             device=device,
             normalizer=result.normalizer,
+            batch_size=predict_batch_size,
         )
+        print(f"Collected val predictions in {time.perf_counter() - t0:.1f} s")
 
         # 4. Per-scenario: save NPZ and append CSV row.
         all_scenario_names = sorted(
