@@ -1,3 +1,7 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+# Modifications: added a real-valued truncated-DFT forward path (_forward_dft) used on Apple MPS.
+
 from typing import List, Optional, Tuple, Union
 
 import torch

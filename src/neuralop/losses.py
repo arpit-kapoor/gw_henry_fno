@@ -1,3 +1,8 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+# Modifications: added RelCombinedNormLoss and the norm helpers compute_linf_l2_norm_torch and
+#   compute_l2_norm_torch.
+
 """
 losses.py contains code to compute standard data objective 
 functions for training Neural Operators. 
@@ -20,7 +25,6 @@ def central_diff_1d(x, h, fix_x_bnd=False):
     # Central difference using torch.roll (periodic by default)
     dx = (torch.roll(x, -1, dims=-1) - torch.roll(x, 1, dims=-1))/(2.0*h)
 
-    # Fix boundaries with forward/backward differences if non-periodic
     if fix_x_bnd:
         dx[...,0] = (x[...,1] - x[...,0])/h      # Forward difference at left boundary
         dx[...,-1] = (x[...,-1] - x[...,-2])/h   # Backward difference at right boundary
@@ -32,20 +36,16 @@ def central_diff_1d(x, h, fix_x_bnd=False):
 # h: scalar or list - grid spacing(s)
 # fix_x_bnd, fix_y_bnd: bool - whether to use forward/backward differences at boundaries
 def central_diff_2d(x, h, fix_x_bnd=False, fix_y_bnd=False):
-    # Convert scalar spacing to list for both dimensions
     if isinstance(h, float):
         h = [h, h]
 
-    # Central differences in x and y directions
     dx = (torch.roll(x, -1, dims=-2) - torch.roll(x, 1, dims=-2))/(2.0*h[0])
     dy = (torch.roll(x, -1, dims=-1) - torch.roll(x, 1, dims=-1))/(2.0*h[1])
 
-    # Fix x-direction boundaries if non-periodic
     if fix_x_bnd:
         dx[...,0,:] = (x[...,1,:] - x[...,0,:])/h[0]      # Forward difference
         dx[...,-1,:] = (x[...,-1,:] - x[...,-2,:])/h[0]   # Backward difference
     
-    # Fix y-direction boundaries if non-periodic
     if fix_y_bnd:
         dy[...,:,0] = (x[...,:,1] - x[...,:,0])/h[1]      # Forward difference
         dy[...,:,-1] = (x[...,:,-1] - x[...,:,-2])/h[1]   # Backward difference
@@ -57,26 +57,21 @@ def central_diff_2d(x, h, fix_x_bnd=False, fix_y_bnd=False):
 # h: scalar or list - grid spacing(s)
 # fix_x_bnd, fix_y_bnd, fix_z_bnd: bool - whether to use forward/backward differences at boundaries
 def central_diff_3d(x, h, fix_x_bnd=False, fix_y_bnd=False, fix_z_bnd=False):
-    # Convert scalar spacing to list for all three dimensions
     if isinstance(h, float):
         h = [h, h, h]
 
-    # Central differences in x, y, and z directions
     dx = (torch.roll(x, -1, dims=-3) - torch.roll(x, 1, dims=-3))/(2.0*h[0])
     dy = (torch.roll(x, -1, dims=-2) - torch.roll(x, 1, dims=-2))/(2.0*h[1])
     dz = (torch.roll(x, -1, dims=-1) - torch.roll(x, 1, dims=-1))/(2.0*h[2])
 
-    # Fix x-direction boundaries if non-periodic
     if fix_x_bnd:
         dx[...,0,:,:] = (x[...,1,:,:] - x[...,0,:,:])/h[0]    # Forward difference
         dx[...,-1,:,:] = (x[...,-1,:,:] - x[...,-2,:,:])/h[0] # Backward difference
     
-    # Fix y-direction boundaries if non-periodic
     if fix_y_bnd:
         dy[...,:,0,:] = (x[...,:,1,:] - x[...,:,0,:])/h[1]    # Forward difference
         dy[...,:,-1,:] = (x[...,:,-1,:] - x[...,:,-2,:])/h[1] # Backward difference
     
-    # Fix z-direction boundaries if non-periodic
     if fix_z_bnd:
         dz[...,:,:,0] = (x[...,:,:,1] - x[...,:,:,0])/h[2]    # Forward difference
         dz[...,:,:,-1] = (x[...,:,:,-1] - x[...,:,:,-2])/h[2] # Backward difference
@@ -84,7 +79,6 @@ def central_diff_3d(x, h, fix_x_bnd=False, fix_y_bnd=False, fix_z_bnd=False):
     return dx, dy, dz
 
 
-# Loss function for computing relative and absolute Lp norms
 class LpLoss(object):
     """
     Computes Lp loss with configurable reduction dimensions and operations.
@@ -108,13 +102,11 @@ class LpLoss(object):
         self.d = d  # Number of spatial dimensions
         self.p = p  # Lp norm order
 
-        # Convert reduce_dims to list format
         if isinstance(reduce_dims, int):
             self.reduce_dims = [reduce_dims]
         else:
             self.reduce_dims = reduce_dims
         
-        # Set up reduction operations for each dimension
         if self.reduce_dims is not None:
             if isinstance(reductions, str):
                 assert reductions == 'sum' or reductions == 'mean'
@@ -124,7 +116,6 @@ class LpLoss(object):
                     assert reductions[j] == 'sum' or reductions[j] == 'mean'
                 self.reductions = reductions
 
-        # Convert domain size to list format
         if isinstance(L, float):
             self.L = [L]*self.d
         else:
@@ -159,11 +150,9 @@ class LpLoss(object):
         
         # Scale by grid volume factor
         const = math.prod(h)**(1.0/self.p)
-        # Compute Lp norm of flattened difference
         diff = const*torch.norm(torch.flatten(x, start_dim=-self.d) - torch.flatten(y, start_dim=-self.d), \
                                               p=self.p, dim=-1, keepdim=False)
 
-        # Apply reductions if specified
         if self.reduce_dims is not None:
             diff = self.reduce_all(diff).squeeze()
             
@@ -171,16 +160,13 @@ class LpLoss(object):
 
     def rel(self, x, y):
         """Compute relative Lp loss between x and y"""
-        # Compute Lp norm of difference
         diff = torch.norm(torch.flatten(x, start_dim=-self.d) - torch.flatten(y, start_dim=-self.d), \
                           p=self.p, dim=-1, keepdim=False)
         # Compute Lp norm of ground truth for normalization
         ynorm = torch.norm(torch.flatten(y, start_dim=-self.d), p=self.p, dim=-1, keepdim=False)
 
-        # Normalize difference by ground truth norm
         diff = diff/ynorm
 
-        # Apply reductions if specified
         if self.reduce_dims is not None:
             diff = self.reduce_all(diff).squeeze()
             
@@ -219,13 +205,11 @@ class H1Loss(object):
         self.fix_y_bnd = fix_y_bnd
         self.fix_z_bnd = fix_z_bnd
 
-        # Convert reduce_dims to list format
         if isinstance(reduce_dims, int):
             self.reduce_dims = [reduce_dims]
         else:
             self.reduce_dims = reduce_dims
         
-        # Set up reduction operations
         if self.reduce_dims is not None:
             if isinstance(reductions, str):
                 assert reductions == 'sum' or reductions == 'mean'
@@ -235,7 +219,6 @@ class H1Loss(object):
                     assert reductions[j] == 'sum' or reductions[j] == 'mean'
                 self.reductions = reductions
 
-        # Convert domain size to list format
         if isinstance(L, float):
             self.L = [L]*self.d
         else:
@@ -247,11 +230,9 @@ class H1Loss(object):
         dict_y = {}  # Store function and derivative terms for y
 
         if self.d == 1:
-            # Store function values
             dict_x[0] = x
             dict_y[0] = y
 
-            # Compute first derivatives
             x_x = central_diff_1d(x, h[0], fix_x_bnd=self.fix_x_bnd)
             y_x = central_diff_1d(y, h[0], fix_x_bnd=self.fix_x_bnd)
 
@@ -259,15 +240,12 @@ class H1Loss(object):
             dict_y[1] = y_x
         
         elif self.d == 2:
-            # Flatten function values for 2D case
             dict_x[0] = torch.flatten(x, start_dim=-2)
             dict_y[0] = torch.flatten(y, start_dim=-2)
 
-            # Compute partial derivatives in x and y directions
             x_x, x_y = central_diff_2d(x, h, fix_x_bnd=self.fix_x_bnd, fix_y_bnd=self.fix_y_bnd)
             y_x, y_y = central_diff_2d(y, h, fix_x_bnd=self.fix_x_bnd, fix_y_bnd=self.fix_y_bnd)
 
-            # Flatten derivatives
             dict_x[1] = torch.flatten(x_x, start_dim=-2)
             dict_x[2] = torch.flatten(x_y, start_dim=-2)
 
@@ -275,15 +253,12 @@ class H1Loss(object):
             dict_y[2] = torch.flatten(y_y, start_dim=-2)
         
         else:  # d == 3
-            # Flatten function values for 3D case
             dict_x[0] = torch.flatten(x, start_dim=-3)
             dict_y[0] = torch.flatten(y, start_dim=-3)
 
-            # Compute partial derivatives in x, y, and z directions
             x_x, x_y, x_z = central_diff_3d(x, h, fix_x_bnd=self.fix_x_bnd, fix_y_bnd=self.fix_y_bnd, fix_z_bnd=self.fix_z_bnd)
             y_x, y_y, y_z = central_diff_3d(y, h, fix_x_bnd=self.fix_x_bnd, fix_y_bnd=self.fix_y_bnd, fix_z_bnd=self.fix_z_bnd)
 
-            # Flatten derivatives
             dict_x[1] = torch.flatten(x_x, start_dim=-3)
             dict_x[2] = torch.flatten(x_y, start_dim=-3)
             dict_x[3] = torch.flatten(x_z, start_dim=-3)
@@ -321,7 +296,6 @@ class H1Loss(object):
             if isinstance(h, float):
                 h = [h]*self.d
             
-        # Get function values and derivatives
         dict_x, dict_y = self.compute_terms(x, y, h)
 
         # Scale by grid volume and compute L2 norm of function difference
@@ -335,7 +309,6 @@ class H1Loss(object):
         # Take square root to get H1 norm
         diff = diff**0.5
 
-        # Apply reductions if specified
         if self.reduce_dims is not None:
             diff = self.reduce_all(diff).squeeze()
             
@@ -350,7 +323,6 @@ class H1Loss(object):
             if isinstance(h, float):
                 h = [h]*self.d
         
-        # Get function values and derivatives
         dict_x, dict_y = self.compute_terms(x, y, h)
 
         # Compute squared L2 norms of differences and ground truth
@@ -365,7 +337,6 @@ class H1Loss(object):
         # Normalize difference by ground truth H1 norm
         diff = (diff**0.5)/(ynorm**0.5)
 
-        # Apply reductions if specified
         if self.reduce_dims is not None:
             diff = self.reduce_all(diff).squeeze()
             
@@ -484,7 +455,6 @@ def friction_drag(wall_shear_stress, vol_elm,
     # Project shear stress onto flow direction
     direction = torch.sum(wall_shear_stress*flow_direction_normal, dim=1, keepdim=False)
 
-    # Note: unused variable x (appears to be debugging artifact)
     x = torch.sum(direction*vol_elm)
 
     # Integrate viscous forces in flow direction
@@ -498,17 +468,14 @@ def total_drag(pressure, wall_shear_stress, vol_elm,
     
     Parameters match those of pressure_drag and friction_drag functions.
     """
-    # Compute pressure drag component
     cp = pressure_drag(pressure, vol_elm, inward_surface_normal, 
                        flow_direction_normal, flow_speed, 
                        reference_area, mass_density)
     
-    # Compute friction drag component
     cf = friction_drag(wall_shear_stress, vol_elm, 
                        flow_direction_normal, flow_speed, 
                        reference_area, mass_density)
     
-    # Return total drag coefficient
     return cp + cf 
 
 
@@ -558,7 +525,6 @@ class WeightedL2DragLoss(object):
         c_truth = None
         loss = 0.
         
-        # Extract wall shear stress from predictions and ground truth
         stress_indices = self.mappings['wall_shear_stress']
         pred_stress = y_pred[stress_indices].view(-1,1)
         truth_stress = y[stress_indices]
@@ -570,12 +536,10 @@ class WeightedL2DragLoss(object):
         truth_stress_pad = torch.zeros((truth_stress.shape[0], 3), device=self.device)
         truth_stress_pad[:,0] = truth_stress.view(-1,)
 
-        # Extract pressure from predictions and ground truth
         pressure_indices = self.mappings['pressure']
         pred_pressure = y_pred[pressure_indices].view(-1,1)
         truth_pressure = y[pressure_indices]
 
-        # Compute predicted total drag coefficient
         c_pred = total_drag(pressure=pred_pressure,
                             wall_shear_stress=pred_stress_pad,
                             vol_elm=vol_elm,
@@ -584,7 +548,6 @@ class WeightedL2DragLoss(object):
                             flow_speed=flow_speed,
                             reference_area=reference_area
                             )
-        # Compute ground truth total drag coefficient
         c_truth = total_drag(pressure=truth_pressure,
                             wall_shear_stress=truth_stress_pad,
                             vol_elm=vol_elm,
@@ -661,7 +624,6 @@ def variance_aware_multicol_loss(
     weighted_mse = (weights * mse_per_node).mean()
     conc_var_loss = torch.sqrt(weighted_mse + 1e-8) 
 
-    # Combine losses
     loss = global_loss + lambda_conc_focus * conc_var_loss
 
     return loss, global_loss.detach(), conc_var_loss.detach()

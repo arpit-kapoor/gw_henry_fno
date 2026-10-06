@@ -46,11 +46,8 @@ echo "Project directory: ${PROJECT_DIR}"
 echo "Current working directory: $(pwd)"
 
 # Problem setting name for organizing results
-# SETTING_NAME="grid_scenarios_ic_random_skip2_20x40"
 SETTING_NAME="grid_scenarios_forced_random_skip4_20x40"
 
-# Set up the scenarios root directory
-# SCENARIOS_ROOT="${SCENARIOS_ROOT:-$HOME/Projects/groundwater/data/simple_henry_data/${SETTING_NAME}}"
 SCENARIOS_ROOT="${SCENARIOS_ROOT:-$HOME/Projects/groundwater/data/henry_forced_data/${SETTING_NAME}}"
 
 # Results directory for storing the outputs of the sweep
@@ -66,7 +63,6 @@ else
   PYTHON_BIN="python"
 fi
 
-# Hyperparameters mirror scripts/sweep_fno_size.pbs
 MODEL_SIZE_PRESETS="${MODEL_SIZE_PRESETS:-small}"
 DEVICE="${DEVICE:-auto}"  # "auto" detects CUDA on Linux, MPS on macOS, or CPU fallback
 EPOCHS="${EPOCHS:-5}"
@@ -100,7 +96,6 @@ echo "Results dir: ${RESULTS_DIR}"
 echo "Grid spacing: dt=${DT}, dz=${DZ}, dx=${DX}"
 echo "============================================================"
 
-# Run the training script with the specified parameters
 set +e
 "${PYTHON_BIN}" "${PROJECT_DIR}/train_fno_sweep.py" \
   --scenario-dir "${SCENARIOS_ROOT}" \

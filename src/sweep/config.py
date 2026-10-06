@@ -43,9 +43,6 @@ class ModelSizeConfig:
     n_layers: int
 
 
-# ---------------------------------------------------------------------------
-# Model-size presets
-# ---------------------------------------------------------------------------
 # Grid:  T_in=25 (max usable modes ≤ 12), Z=20 (≤ 10), X=40 (≤ 20).
 # Modes are scaled together with hidden_channels to keep compute balanced.
 

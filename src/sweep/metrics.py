@@ -57,7 +57,6 @@ def evaluate_l2(
     dataloader,
     device: torch.device,
 ) -> float:
-    # Keeping this for backwards compatibility if used elsewhere
     model.eval()
     total_loss = 0.0
     total_samples = 0

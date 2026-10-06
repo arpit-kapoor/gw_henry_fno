@@ -105,11 +105,8 @@ def train_one_model(
         weight_decay=weight_decay,
     )
 
-    # Use RelCombinedNormLoss for training (backprop)
     train_criterion = RelCombinedNormLoss(dt=dt, dz=dz, dx=dx)
     
-    # Old LpLoss for logging
-    # lploss_train_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions="mean")
     lploss_accum_criterion = LpLoss(d=3, p=2, reduce_dims=[0, 1], reductions=["sum", "mean"])
 
     scheduler: Optional[torch.optim.lr_scheduler.StepLR] = None

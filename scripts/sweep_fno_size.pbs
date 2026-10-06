@@ -13,16 +13,12 @@
 #PBS -j oe
 
 # =============================================================================
-# 3-D FNO architecture sweep — grid_scenarios_random_skip2_20x40
+# 3-D FNO architecture sweep
 #
 # Dataset layout  : scenario_NNN/scenario.npz  (one packed file per scenario)
 # Model           : 3-D FNO  n_modes=(n_modes_t, n_modes_z, n_modes_x)
 # Split           : 70/30 random at run-index level, shared across all scenarios
 # =============================================================================
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 
 # Name of the dataset archive on scratch (without extension)
 SETTING_NAME="grid_scenarios_random_skip2_20x40_new_beta"
@@ -43,10 +39,6 @@ SCENARIOS_ROOT="$PBS_JOBFS/${SETTING_NAME}"
 
 # Results directory on persistent scratch
 RESULTS_DIR="${RESULTS_DIR:-/scratch/yl75/${USER}/results/groundwater/fno_3d_henry_sweep/${SETTING_NAME}}"
-
-# ---------------------------------------------------------------------------
-# Python environment & Working Directory
-# ---------------------------------------------------------------------------
 
 # Prevent cluster-provided Python packages from overriding the venv packages
 unset PYTHONPATH PYTHONHOME
@@ -84,7 +76,7 @@ if [ ! -d "${SCENARIOS_ROOT}" ]; then
     exit 1
 fi
 
-# Spatial and temporal grid spacing for the TotalNormLoss metric
+# Spatial and temporal grid spacing for the RelCombinedNormLoss metric
 # Can be overridden via qsub -v DT=..., DZ=..., DX=...
 DT="${DT:-0.04}"
 DZ="${DZ:-0.05}"
@@ -99,10 +91,6 @@ echo "epochs         : ${EPOCHS}"
 echo "grid spacing   : dt=${DT}, dz=${DZ}, dx=${DX}"
 echo "device         : GPU (gpuvolta)"
 echo "============================================================"
-
-# ---------------------------------------------------------------------------
-# Run the sweep
-# ---------------------------------------------------------------------------
 
 "${PYTHON_BIN}" train_fno_sweep.py \
     --scenario-dir        "${SCENARIOS_ROOT}"        \
@@ -124,10 +112,6 @@ echo "============================================================"
     --dt                  "${DT}"                    \
     --dz                  "${DZ}"                    \
     --dx                  "${DX}"
-
-# ---------------------------------------------------------------------------
-# Exit handling
-# ---------------------------------------------------------------------------
 
 status=$?
 if [ "${status}" -ne 0 ]; then

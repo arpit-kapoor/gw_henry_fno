@@ -104,7 +104,6 @@ class HenryScenarioDataset(Dataset):
         self.cache_scenarios = cache_scenarios
         self.normalizer = normalizer
 
-        # Discover sorted scenario directories.
         self.scenario_dirs: List[Path] = self._discover_scenario_dirs(
             self.scenarios_dir
         )
@@ -117,7 +116,6 @@ class HenryScenarioDataset(Dataset):
         n_runs = self._probe_n_runs(self.scenario_dirs[0])
 
         # Compute shared train/val run indices — same partition for every scenario.
-        # Both lists are stored as attributes for external inspection.
         self.train_indices, self.val_indices = self._split_run_indices(
             n_runs=n_runs,
             train_ratio=train_ratio,
@@ -142,13 +140,8 @@ class HenryScenarioDataset(Dataset):
         # Scenario-level array cache: scenario_index -> (input_arr, output_arr).
         self._scenario_cache: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
-        # Channel names are populated on first NPZ load.
         self._input_channel_names: List[str] = []
         self._output_channel_names: List[str] = []
-
-    # ------------------------------------------------------------------
-    # Discovery
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _discover_scenario_dirs(scenarios_dir: Path) -> List[Path]:
@@ -156,10 +149,6 @@ class HenryScenarioDataset(Dataset):
         return sorted(
             p for p in scenarios_dir.glob("scenario_*") if p.is_dir()
         )
-
-    # ------------------------------------------------------------------
-    # Splitting
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _probe_n_runs(scenario_dir: Path) -> int:
@@ -206,10 +195,6 @@ class HenryScenarioDataset(Dataset):
 
         n_train = max(1, min(int(n_runs * train_ratio), n_runs - 1))
         return indices[:n_train], indices[n_train:]
-
-    # ------------------------------------------------------------------
-    # Data loading
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _load_scenario_npz(
@@ -297,10 +282,6 @@ class HenryScenarioDataset(Dataset):
 
         return inputs, outputs
 
-    # ------------------------------------------------------------------
-    # Dataset interface
-    # ------------------------------------------------------------------
-
     def __len__(self) -> int:
         """Total number of samples in this split."""
         return len(self._sample_refs)
@@ -324,10 +305,6 @@ class HenryScenarioDataset(Dataset):
             y = self.normalizer.normalize_output(y)
 
         return x, y
-
-    # ------------------------------------------------------------------
-    # Properties and helpers
-    # ------------------------------------------------------------------
 
     @property
     def input_channel_names(self) -> List[str]:

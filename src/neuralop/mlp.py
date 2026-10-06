@@ -1,3 +1,7 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+# Modifications: added pointwise_conv and a channels-last forward path used on Apple MPS.
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -1,3 +1,6 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+
 import torch
 from torch import nn
 import torch.nn.functional as F

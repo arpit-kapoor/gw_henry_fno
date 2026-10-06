@@ -1,3 +1,6 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+
 import torch
 from torch import nn
 from abc import ABC, abstractmethod
@@ -66,7 +69,6 @@ class SinusoidalEmbedding(Embedding):
         self.in_channels = in_channels
         self.num_frequencies = num_frequencies
         
-        # verify embedding type
         allowed_embeddings = ['nerf', 'transformer']
         assert embedding_type in allowed_embeddings, \
             f"Error: embedding_type expected one of {allowed_embeddings}, received {embedding_type}"

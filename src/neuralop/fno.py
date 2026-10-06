@@ -1,3 +1,7 @@
+# Adapted from the neuraloperator library (https://github.com/neuraloperator/neuraloperator).
+# Copyright (c) 2023 NeuralOperator developers. MIT License; see LICENSE in this directory.
+# Modifications: skip connections are applied via pointwise_conv (see mlp.py).
+
 from __future__ import absolute_import
 
 import torch
@@ -68,7 +72,6 @@ class FNOBlocks(nn.Module):
             ]
         )
 
-        # Create spectral convolution layers
         self.convs = nn.ModuleList([
             SpectralConv(
                 hidden_channels,
@@ -98,15 +101,12 @@ class FNOBlocks(nn.Module):
             Output tensor after passing through the FNOBlocks.
         """
         for layer_idx in range(self.n_layers):
-            # Compute skip connection for this layer
             x_skip_fno = pointwise_conv(self.fno_skips[layer_idx], x)
-            # Apply spectral convolution for this layer
             if isinstance(output_shape, list):
                 out_shape = output_shape[layer_idx] if layer_idx < len(output_shape) else None
             else:
                 out_shape = output_shape
             x_fno = self.convs[layer_idx](x, output_shape=out_shape)
-            # Add skip connection
             x = x_fno + x_skip_fno
             # Apply non-linearity after all but the last layer
             if layer_idx < (self.n_layers - 1):
@@ -207,7 +207,6 @@ class FNO(nn.Module):
             non_linearity=non_linearity,
         )
 
-        # Use FNOBlocks for the sequence of Fourier layers with skip connections
         self.fno_blocks = FNOBlocks(
             n_layers=n_layers,
             n_modes=n_modes,
@@ -241,13 +240,6 @@ class FNO(nn.Module):
             Output tensor after passing through the FNO model.
         """
 
-        # The following code is commented out for potential future use:
-        # It allows for flexible output shape specification for each FNO block.
-        # if output_shape is None:
-        #     output_shape = [None]*self.n_layers
-        # elif isinstance(output_shape, tuple):
-        #     output_shape = [None]*(self.n_layers - 1) + [output_shape]
-        
         x = self.lifting(x)
         x = self.fno_blocks(x, output_shape=output_shape)
         x = self.projection(x)
@@ -303,7 +295,6 @@ class FNOInterpolate(nn.Module):
         projection_channel_ratio=4,
         
         # Interpolation settings
-        # interpolation_mode='trilinear',  # 'bilinear' for 2D, 'trilinear' for 3D
         align_corners=True,
         padding_mode='border',
     ):
@@ -356,11 +347,9 @@ class FNOInterpolate(nn.Module):
         self.latent_feature_channels = latent_feature_channels
         self.fno_hidden_channels = fno_hidden_channels
         self.projection_channel_ratio = projection_channel_ratio
-        # self.interpolation_mode = interpolation_mode
         self.align_corners = align_corners
         self.padding_mode = padding_mode
         
-        # Validate coordinate dimension matches grid size
         assert len(latent_query_dims) == coord_dim, \
             f"Grid size dimensions {len(latent_query_dims)} must match coord_dim {coord_dim}"
         
@@ -368,13 +357,11 @@ class FNOInterpolate(nn.Module):
         # ('bilinear' automatically does trilinear interpolation for 3D grids)
         self.interpolation_mode = 'bilinear'
         
-        # Calculate FNO input channels
         if latent_feature_channels is not None:
             self.fno_in_channels = in_channels + latent_feature_channels
         else:
             self.fno_in_channels = in_channels
         
-        # Lifting layer
         self.lifting = MLP(
             in_channels=self.fno_in_channels,
             out_channels=fno_hidden_channels,
@@ -383,7 +370,6 @@ class FNOInterpolate(nn.Module):
             n_dim=coord_dim,
         )
         
-        # FNO blocks
         self.fno_blocks = FNOBlocks(
             n_layers=fno_n_layers,
             n_modes=fno_n_modes,
@@ -395,7 +381,6 @@ class FNOInterpolate(nn.Module):
             non_linearity=fno_non_linearity,
         )
         
-        # Projection layer
         projection_channels = projection_channel_ratio * fno_hidden_channels
         
         self.projection = MLP(
@@ -423,7 +408,6 @@ class FNOInterpolate(nn.Module):
         torch.Tensor
             Normalized coordinates in [-1, 1]
         """
-        # Calculate bounding box from input geometry
         min_coords = input_geom.min(dim=0, keepdim=True)[0]  # (1, coord_dim)
         max_coords = input_geom.max(dim=0, keepdim=True)[0]  # (1, coord_dim)
         
@@ -459,16 +443,12 @@ class FNOInterpolate(nn.Module):
         
         # Simple approach: Use nearest neighbor interpolation via broadcasting
         # For each grid point, find nearest input point and copy its features
-        # This is a simplified version; more sophisticated methods could be used
         
-        # Compute distances between all grid points and input points
         # grid_coords: (n_grid, coord_dim), points: (n_points, coord_dim)
         distances = torch.cdist(grid_coords.unsqueeze(0), points.unsqueeze(0)).squeeze(0)  # (n_grid, n_points)
         
-        # Find nearest neighbor for each grid point
         nearest_idx = distances.argmin(dim=1)  # (n_grid,)
         
-        # Gather features from nearest neighbors
         # features: (batch, n_points, in_channels)
         grid_features = features[:, nearest_idx, :]  # (batch, n_grid, in_channels)
         
@@ -534,15 +514,12 @@ class FNOInterpolate(nn.Module):
         # grid_sample expects coordinates in format:
         # 2D: (batch, H, W, 2), 3D: (batch, D, H, W, 3)
         if self.coord_dim == 2:
-            # Reshape to (batch, n_points, 1, 2)
             sample_grid = normalized_coords.unsqueeze(0).unsqueeze(2)  # (1, n_points, 1, 2)
             sample_grid = sample_grid.expand(batch_size, -1, -1, -1)
         elif self.coord_dim == 3:
-            # Reshape to (batch, n_points, 1, 1, 3)
             sample_grid = normalized_coords.unsqueeze(0).unsqueeze(2).unsqueeze(3)  # (1, n_points, 1, 1, 3)
             sample_grid = sample_grid.expand(batch_size, -1, -1, -1, -1)
         
-        # Sample from grid
         sampled = F.grid_sample(
             grid_features,
             sample_grid,
@@ -588,7 +565,6 @@ class FNOInterpolate(nn.Module):
         else:
             batch_size = x.shape[0]
         
-        # Validate latent features
         if latent_features is not None:
             assert self.latent_feature_channels is not None, \
                 "if passing latent features, latent_feature_channels must be set."
@@ -611,14 +587,12 @@ class FNOInterpolate(nn.Module):
             latent_features = latent_features.permute(0, len(latent_features.shape)-1, *list(range(1, len(latent_features.shape)-1)))
             grid_features = torch.cat([grid_features, latent_features], dim=1)
         
-        # Process through FNO
         grid_features = self.lifting(grid_features)
         grid_features = self.fno_blocks(grid_features)
         
         # Interpolate from grid to output queries
         output_features = self._interpolate_from_grid(grid_features, output_queries, input_geom)
         
-        # Apply projection
         if isinstance(output_features, dict):
             for key in output_features.keys():
                 # Permute to (batch, channels, n_points) for projection

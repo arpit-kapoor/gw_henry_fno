@@ -49,10 +49,6 @@ class Normalizer:
         self.output_std = output_std
         self.epsilon = epsilon
 
-    # ------------------------------------------------------------------
-    # Construction helpers
-    # ------------------------------------------------------------------
-
     @classmethod
     def from_dataset(
         cls,
@@ -115,10 +111,6 @@ class Normalizer:
             epsilon=epsilon,
         )
 
-    # ------------------------------------------------------------------
-    # Internal broadcasting helper
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _broadcast_stats(
         stats: torch.Tensor,
@@ -178,10 +170,6 @@ class Normalizer:
         view_shape = [1] * ndim
         view_shape[channel_dim] = -1
         return stats.view(*view_shape)
-
-    # ------------------------------------------------------------------
-    # Normalise / denormalise
-    # ------------------------------------------------------------------
 
     def normalize_input(
         self, x: torch.Tensor, channel_dim: Optional[int] = None
@@ -247,10 +235,6 @@ class Normalizer:
             (self.output_std + self.epsilon).to(device), y, channel_dim
         )
         return y * std + mean
-
-    # ------------------------------------------------------------------
-    # Serialisation
-    # ------------------------------------------------------------------
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON/NPZ serialisation."""
