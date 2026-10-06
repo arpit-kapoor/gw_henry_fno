@@ -82,10 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_scenario_arg(
         parser,
         required=False,
-        default=Path(
-            "/Users/akap5486/Projects/groundwater/data/simple_henry_data/"
-            "grid_scenarios_random_skip2_20x40"
-        ),
+        default=Path.home()
+        / "Projects/groundwater/data/simple_henry_data/grid_scenarios_random_skip2_20x40",
     )
     add_training_args(parser, default_epochs=100, default_batch_size=512)
     add_scheduler_args(parser, default_step_size=5, default_decay=0.98)

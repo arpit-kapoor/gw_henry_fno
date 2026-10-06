@@ -46,10 +46,12 @@ echo "Project directory: ${PROJECT_DIR}"
 echo "Current working directory: $(pwd)"
 
 # Problem setting name for organizing results
-SETTING_NAME="grid_scenarios_ic_random_skip2_20x40"
+# SETTING_NAME="grid_scenarios_ic_random_skip2_20x40"
+SETTING_NAME="grid_scenarios_forced_random_skip4_20x40"
 
 # Set up the scenarios root directory
-SCENARIOS_ROOT="${SCENARIOS_ROOT:-$HOME/Projects/groundwater/data/simple_henry_data/${SETTING_NAME}}"
+# SCENARIOS_ROOT="${SCENARIOS_ROOT:-$HOME/Projects/groundwater/data/simple_henry_data/${SETTING_NAME}}"
+SCENARIOS_ROOT="${SCENARIOS_ROOT:-$HOME/Projects/groundwater/data/henry_forced_data/${SETTING_NAME}}"
 
 # Results directory for storing the outputs of the sweep
 RESULTS_DIR="${RESULTS_DIR:-$HOME/Projects/groundwater/results/fno_simple_henry_sweep/${SETTING_NAME}}"

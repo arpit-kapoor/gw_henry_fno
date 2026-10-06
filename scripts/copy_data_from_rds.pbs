@@ -22,7 +22,7 @@ filename=grid_scenarios_random_skip2_20x40_new_beta.tar.gz
 remote_path=/rds/${RDSPROJECT}/data/simple_henry/${filename}
 
 # Gadi:
-dest_path=/scratch/yl75/ak4177/data/simple_henry/
+dest_path=/scratch/yl75/${USER}/data/simple_henry/
 
 # Copy folder with sftp
 sftp -r ${remote_user}@${remote_host}:${remote_path} ${dest_path}
